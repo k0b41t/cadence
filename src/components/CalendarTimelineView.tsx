@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
   ChevronLeft,
@@ -6,6 +6,8 @@ import {
   Circle,
   Link2,
   MessageSquare,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { addDaysToDateKey, getTodayDateKey } from '../lib/kanbanService';
 import type { Board, Column, Priority, Task } from '../types/kanban';
@@ -21,7 +23,36 @@ interface CalendarTimelineViewProps {
   onToggleTaskComplete: (task: Task) => void;
 }
 
-const DAY_COL_WIDTH = 48; // px per day cell
+type ZoomGranularity = 'day' | 'week' | 'month';
+
+interface TimelineBucket {
+  key: string;
+  startKey: string;
+  endKey: string;
+  days: number;
+  topLabel: string;
+  subLabel: string;
+  mainLabel: string;
+  isCurrent: boolean;
+  isWeekend?: boolean;
+}
+
+const MIN_PX_PER_DAY = 2.5;
+const MAX_PX_PER_DAY = 80;
+const DAY_THRESHOLD_PX = 24;
+const WEEK_THRESHOLD_PX = 9;
+
+const DEFAULT_PX_FOR_GRANULARITY: Record<ZoomGranularity, number> = {
+  day: 48,
+  week: 14,
+  month: 4.5,
+};
+
+function getGranularity(pxPerDay: number): ZoomGranularity {
+  if (pxPerDay >= DAY_THRESHOLD_PX) return 'day';
+  if (pxPerDay >= WEEK_THRESHOLD_PX) return 'week';
+  return 'month';
+}
 
 function parseDateKeyToUtcMs(dateKey: string): number {
   const [y, m, d] = dateKey.split('-').map(Number);
@@ -45,23 +76,146 @@ function formatShortDate(dateKey: string): string {
   return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-function formatDayMeta(dateKey: string): {
-  weekday: string;
-  dayNum: string;
-  monthShort: string;
-  isFirstOfMonth: boolean;
-  isWeekend: boolean;
-} {
+function formatMonthYear(dateKey: string): string {
   const [y, m, d] = dateKey.split('-').map(Number);
   const dt = new Date(y, (m || 1) - 1, d || 1);
-  const dow = dt.getDay();
-  return {
-    weekday: dt.toLocaleDateString('en-US', { weekday: 'short' }).slice(0, 2),
-    dayNum: String(d),
-    monthShort: dt.toLocaleDateString('en-US', { month: 'short' }),
-    isFirstOfMonth: d === 1,
-    isWeekend: dow === 0 || dow === 6,
-  };
+  return dt.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+}
+
+function getMondayOfWeek(dateKey: string): string {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const dt = new Date(Date.UTC(y || 2026, (m || 1) - 1, d || 1));
+  const dow = dt.getUTCDay();
+  const offset = dow === 0 ? -6 : 1 - dow;
+  return addDaysToDateKey(dateKey, offset);
+}
+
+function getFirstOfMonth(dateKey: string): string {
+  return `${dateKey.slice(0, 7)}-01`;
+}
+
+function getDaysInMonth(year: number, month1Based: number): number {
+  return new Date(Date.UTC(year, month1Based, 0)).getUTCDate();
+}
+
+function alignStartForGranularity(dateKey: string, granularity: ZoomGranularity): string {
+  if (granularity === 'week') return getMondayOfWeek(dateKey);
+  if (granularity === 'month') return getFirstOfMonth(dateKey);
+  return dateKey;
+}
+
+function buildBuckets(
+  rawStartKey: string,
+  granularity: ZoomGranularity,
+  minDays: number,
+  pxPerDay: number,
+  todayKey: string
+): { gridStartKey: string; totalDays: number; buckets: TimelineBucket[] } {
+  if (granularity === 'day') {
+    const gridStartKey = rawStartKey;
+    const buckets: TimelineBucket[] = [];
+    for (let i = 0; i < minDays; i++) {
+      const key = addDaysToDateKey(gridStartKey, i);
+      const [y, m, d] = key.split('-').map(Number);
+      const dt = new Date(y, (m || 1) - 1, d || 1);
+      const dow = dt.getDay();
+      const weekdayFull = dt.toLocaleDateString('en-US', { weekday: 'short' });
+      const weekdayLabel = pxPerDay >= 36 ? weekdayFull.slice(0, 2) : weekdayFull.slice(0, 1);
+      const monthShort = dt.toLocaleDateString('en-US', { month: 'short' });
+      buckets.push({
+        key,
+        startKey: key,
+        endKey: key,
+        days: 1,
+        topLabel: i === 0 || d === 1 ? monthShort : '',
+        subLabel: weekdayLabel,
+        mainLabel: String(d),
+        isCurrent: key === todayKey,
+        isWeekend: dow === 0 || dow === 6,
+      });
+    }
+    return { gridStartKey, totalDays: minDays, buckets };
+  }
+
+  if (granularity === 'week') {
+    const gridStartKey = getMondayOfWeek(rawStartKey);
+    const numWeeks = Math.max(8, Math.ceil(minDays / 7));
+    const buckets: TimelineBucket[] = [];
+    let prevMonthKey = '';
+
+    for (let w = 0; w < numWeeks; w++) {
+      const startKey = addDaysToDateKey(gridStartKey, w * 7);
+      const endKey = addDaysToDateKey(startKey, 6);
+      const [sy, sm, sd] = startKey.split('-').map(Number);
+      const [, em, ed] = endKey.split('-').map(Number);
+      const startDt = new Date(sy, (sm || 1) - 1, sd || 1);
+      const startMonthKey = startKey.slice(0, 7);
+      const showMonth = w === 0 || startMonthKey !== prevMonthKey;
+      prevMonthKey = startMonthKey;
+
+      const monthShort = startDt.toLocaleDateString('en-US', { month: 'short' });
+      const weekWidth = 7 * pxPerDay;
+      const mainLabel =
+        weekWidth >= 112
+          ? sm === em
+            ? `${monthShort} ${sd}–${ed}`
+            : `${formatShortDate(startKey)}–${formatShortDate(endKey)}`
+          : weekWidth >= 78
+            ? `${monthShort} ${sd}`
+            : `${sm}/${sd}`;
+
+      buckets.push({
+        key: startKey,
+        startKey,
+        endKey,
+        days: 7,
+        topLabel: showMonth ? (sm === 1 || w === 0 ? `${monthShort} ${sy}` : monthShort) : '',
+        subLabel: 'Wk',
+        mainLabel,
+        isCurrent: todayKey >= startKey && todayKey <= endKey,
+      });
+    }
+    return { gridStartKey, totalDays: numWeeks * 7, buckets };
+  }
+
+  // Month granularity
+  const gridStartKey = getFirstOfMonth(rawStartKey);
+  let [year, month] = gridStartKey.split('-').map(Number);
+  const buckets: TimelineBucket[] = [];
+  let accumulatedDays = 0;
+
+  while (accumulatedDays < minDays || buckets.length < 6) {
+    const days = getDaysInMonth(year, month);
+    const monthStr = String(month).padStart(2, '0');
+    const startKey = `${year}-${monthStr}-01`;
+    const endKey = `${year}-${monthStr}-${String(days).padStart(2, '0')}`;
+    const dt = new Date(year, month - 1, 1);
+    const monthWidth = days * pxPerDay;
+    const mainLabel =
+      monthWidth >= 115
+        ? dt.toLocaleDateString('en-US', { month: 'long' })
+        : dt.toLocaleDateString('en-US', { month: 'short' });
+
+    buckets.push({
+      key: startKey,
+      startKey,
+      endKey,
+      days,
+      topLabel: buckets.length === 0 || month === 1 ? String(year) : '',
+      subLabel: '',
+      mainLabel,
+      isCurrent: todayKey >= startKey && todayKey <= endKey,
+    });
+
+    accumulatedDays += days;
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+  }
+
+  return { gridStartKey, totalDays: accumulatedDays, buckets };
 }
 
 const PRIORITY_TEXT: Record<Priority, string> = {
@@ -112,7 +266,6 @@ function computeTaskSpan(task: Task, todayKey: string): TaskSpanComputed {
         plannedEndKey = task.dueDate;
       }
     } else {
-      // Overdue: dueDate < todayKey
       solidStartKey = startKey;
       solidEndKey = task.dueDate >= startKey ? task.dueDate : startKey;
       overdueStartKey = solidEndKey;
@@ -157,19 +310,266 @@ export function CalendarTimelineView({
   onToggleTaskComplete,
 }: CalendarTimelineViewProps) {
   const todayKey = useMemo(() => getTodayDateKey(), []);
-  const [spanDays, setSpanDays] = useState<14 | 21 | 30>(21);
-  const [windowStart, setWindowStart] = useState<string>(() => addDaysToDateKey(getTodayDateKey(), -5));
+  const [pxPerDay, setPxPerDay] = useState<number>(DEFAULT_PX_FOR_GRANULARITY.day);
+  const [windowStart, setWindowStart] = useState<string>(() => addDaysToDateKey(getTodayDateKey(), -14));
   const [groupByColumn, setGroupByColumn] = useState(true);
+  const [viewportTimelineWidth, setViewportTimelineWidth] = useState<number>(960);
 
-  const windowDays = useMemo(() => {
-    const list: string[] = [];
-    for (let i = 0; i < spanDays; i++) {
-      list.push(addDaysToDateKey(windowStart, i));
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const leftColRef = useRef<HTMLDivElement | null>(null);
+  const hasInitializedScrollRef = useRef(false);
+  const pendingScrollRef = useRef<{ scrollLeft: number } | null>(null);
+
+  const granularity = getGranularity(pxPerDay);
+  const hasTasks = tasks.length > 0;
+
+  // Measure available timeline viewport width so zooming out always fills the canvas
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const updateWidth = () => {
+      const stickyW = leftColRef.current?.offsetWidth ?? 280;
+      setViewportTimelineWidth(Math.max(360, el.clientWidth - stickyW));
+    };
+    updateWidth();
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(updateWidth);
+      observer.observe(el);
+      return () => observer.disconnect();
     }
-    return list;
-  }, [windowStart, spanDays]);
+    window.addEventListener('resize', updateWidth);
+    return () => window.removeEventListener('resize', updateWidth);
+  }, [hasTasks]);
 
-  const windowEnd = windowDays[windowDays.length - 1];
+  const visibleDaysEstimate = Math.ceil(viewportTimelineWidth / pxPerDay);
+  const minDaysToRender = useMemo(() => {
+    if (granularity === 'month') return Math.max(visibleDaysEstimate + 240, 420);
+    if (granularity === 'week') return Math.max(visibleDaysEstimate + 84, 140);
+    return Math.max(visibleDaysEstimate + 28, 42);
+  }, [granularity, visibleDaysEstimate]);
+
+  const { gridStartKey, totalDays, buckets } = useMemo(
+    () => buildBuckets(windowStart, granularity, minDaysToRender, pxPerDay, todayKey),
+    [windowStart, granularity, minDaysToRender, pxPerDay, todayKey]
+  );
+
+  const gridEndKey = useMemo(
+    () => addDaysToDateKey(gridStartKey, totalDays - 1),
+    [gridStartKey, totalDays]
+  );
+
+  const gridTotalWidth = totalDays * pxPerDay;
+
+  // Keep synchronous zoom math refs for zero-jitter multi-tick wheel bursts
+  const liveZoomRef = useRef({
+    pxPerDay,
+    gridStartKey,
+    totalDays,
+  });
+  liveZoomRef.current = { pxPerDay, gridStartKey, totalDays };
+
+  // Center initial scroll nicely around Today (-5 days visible) once mounted
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    if (pendingScrollRef.current !== null) {
+      el.scrollLeft = pendingScrollRef.current.scrollLeft;
+      pendingScrollRef.current = null;
+      return;
+    }
+
+    if (!hasInitializedScrollRef.current && tasks.length > 0) {
+      hasInitializedScrollRef.current = true;
+      const targetStart = addDaysToDateKey(todayKey, -5);
+      const offsetDays = Math.max(0, diffDays(gridStartKey, targetStart));
+      el.scrollLeft = offsetDays * pxPerDay;
+    }
+  }, [pxPerDay, gridStartKey, todayKey, tasks.length]);
+
+  const applyZoom = useCallback(
+    (nextPx: number, clientX?: number) => {
+      const el = scrollContainerRef.current;
+      const current = liveZoomRef.current;
+      const clampedPx = Math.max(MIN_PX_PER_DAY, Math.min(MAX_PX_PER_DAY, nextPx));
+      if (!el || Math.abs(clampedPx - current.pxPerDay) < 0.01) return;
+
+      const stickyW = leftColRef.current?.offsetWidth ?? 280;
+      const timelineWidth = Math.max(320, el.clientWidth - stickyW);
+      const currentScrollLeft = pendingScrollRef.current?.scrollLeft ?? el.scrollLeft;
+
+      let pointerOffset = timelineWidth / 2;
+      if (typeof clientX === 'number') {
+        const rect = el.getBoundingClientRect();
+        const rawOffset = clientX - rect.left - stickyW;
+        if (rawOffset >= 0 && rawOffset <= timelineWidth) {
+          pointerOffset = rawOffset;
+        }
+      }
+
+      const dayFloatFromGridStart = (currentScrollLeft + pointerOffset) / current.pxPerDay;
+      const wholeDays = Math.floor(dayFloatFromGridStart);
+      const subDayFraction = dayFloatFromGridStart - wholeDays;
+      const anchorDateKey = addDaysToDateKey(current.gridStartKey, wholeDays);
+
+      const nextGranularity = getGranularity(clampedPx);
+      const nextVisibleDays = Math.ceil(timelineWidth / clampedPx);
+      const leftBufferDays =
+        nextGranularity === 'month'
+          ? Math.max(120, Math.ceil(nextVisibleDays * 0.75))
+          : nextGranularity === 'week'
+            ? Math.max(42, Math.ceil(nextVisibleDays * 0.75))
+            : Math.max(14, Math.ceil(nextVisibleDays * 0.75));
+
+      const desiredViewportLeftDays = wholeDays + subDayFraction - pointerOffset / clampedPx;
+      const rawNewStart = addDaysToDateKey(
+        current.gridStartKey,
+        Math.floor(desiredViewportLeftDays) - leftBufferDays
+      );
+      const alignedNewStart = alignStartForGranularity(rawNewStart, nextGranularity);
+
+      const newDaysToAnchor = diffDays(alignedNewStart, anchorDateKey) + subDayFraction;
+      const nextScrollLeft = Math.max(0, newDaysToAnchor * clampedPx - pointerOffset);
+
+      liveZoomRef.current = {
+        pxPerDay: clampedPx,
+        gridStartKey: alignedNewStart,
+        totalDays: current.totalDays,
+      };
+      pendingScrollRef.current = { scrollLeft: nextScrollLeft };
+
+      setWindowStart(alignedNewStart);
+      setPxPerDay(clampedPx);
+    },
+    []
+  );
+
+  // Non-passive mouse wheel listener for zoom on hover
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      // Allow native horizontal trackpad swipe or Shift+wheel horizontal pan
+      if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      if (Math.abs(e.deltaY) < 0.01) return;
+
+      const stickyW = leftColRef.current?.offsetWidth ?? 280;
+      const rect = el.getBoundingClientRect();
+      const overLeftTaskColumn = e.clientX - rect.left < stickyW;
+      const hasVerticalOverflow = el.scrollHeight > el.clientHeight + 4;
+
+      // If hovered over the sticky task list and rows overflow vertically, scroll tasks normally;
+      // hovering anywhere over the calendar timeline always zooms in/out
+      if (overLeftTaskColumn && hasVerticalOverflow) return;
+
+      e.preventDefault();
+
+      const scaleUnit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 240 : 1;
+      const normalizedDeltaY = Math.max(-120, Math.min(120, e.deltaY * scaleUnit));
+      const zoomFactor = Math.exp(-normalizedDeltaY * 0.0024);
+      const nextPx = liveZoomRef.current.pxPerDay * zoomFactor;
+
+      applyZoom(nextPx, e.clientX);
+    };
+
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, [applyZoom, tasks.length]);
+
+  const jumpToDate = useCallback(
+    (targetDateKey: string, viewportRatio = 0.2) => {
+      const el = scrollContainerRef.current;
+      const stickyW = leftColRef.current?.offsetWidth ?? 280;
+      const timelineWidth = el ? Math.max(320, el.clientWidth - stickyW) : viewportTimelineWidth;
+      const visibleDays = Math.ceil(timelineWidth / pxPerDay);
+      const leftBuffer =
+        granularity === 'month'
+          ? Math.max(120, Math.ceil(visibleDays * 0.75))
+          : granularity === 'week'
+            ? Math.max(42, Math.ceil(visibleDays * 0.75))
+            : Math.max(14, Math.ceil(visibleDays * 0.75));
+
+      const offsetPx = timelineWidth * viewportRatio;
+      const desiredLeftDate = addDaysToDateKey(
+        targetDateKey,
+        -Math.round(offsetPx / pxPerDay)
+      );
+      const alignedStart = alignStartForGranularity(
+        addDaysToDateKey(desiredLeftDate, -leftBuffer),
+        granularity
+      );
+      const nextScrollLeft = Math.max(0, diffDays(alignedStart, targetDateKey) * pxPerDay - offsetPx);
+
+      pendingScrollRef.current = { scrollLeft: nextScrollLeft };
+      setWindowStart(alignedStart);
+    },
+    [granularity, pxPerDay, viewportTimelineWidth]
+  );
+
+  const handlePanStep = (direction: -1 | 1) => {
+    const el = scrollContainerRef.current;
+    const stepDays = granularity === 'month' ? 90 : granularity === 'week' ? 28 : 7;
+    if (!el) {
+      setWindowStart((prev) => alignStartForGranularity(addDaysToDateKey(prev, direction * stepDays), granularity));
+      return;
+    }
+
+    const nextScroll = el.scrollLeft + direction * stepDays * pxPerDay;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    if (nextScroll >= 0 && nextScroll <= maxScroll) {
+      el.scrollBy({ left: direction * stepDays * pxPerDay, behavior: 'smooth' });
+      return;
+    }
+
+    const stickyW = leftColRef.current?.offsetWidth ?? 280;
+    const timelineWidth = Math.max(320, el.clientWidth - stickyW);
+    const currentCenterDay = Math.round((el.scrollLeft + timelineWidth / 2) / pxPerDay);
+    const currentCenterDate = addDaysToDateKey(gridStartKey, currentCenterDay);
+    const nextCenterDate = addDaysToDateKey(currentCenterDate, direction * stepDays);
+    jumpToDate(nextCenterDate, 0.5);
+  };
+
+  const handleFitTasks = () => {
+    if (tasks.length === 0) {
+      applyZoom(DEFAULT_PX_FOR_GRANULARITY.day);
+      jumpToDate(todayKey, 0.25);
+      return;
+    }
+    let earliest = todayKey;
+    let latest = todayKey;
+    for (const t of tasks) {
+      const span = computeTaskSpan(t, todayKey);
+      if (span.minKey < earliest) earliest = span.minKey;
+      if (span.maxKey > latest) latest = span.maxKey;
+    }
+    const spanDays = Math.max(7, diffDays(earliest, latest) + 4);
+    const fitPx = Math.max(
+      MIN_PX_PER_DAY,
+      Math.min(64, (viewportTimelineWidth - 24) / spanDays)
+    );
+    const nextGranularity = getGranularity(fitPx);
+    const nextVisibleDays = Math.ceil(viewportTimelineWidth / fitPx);
+    const leftBuffer =
+      nextGranularity === 'month'
+        ? Math.max(120, Math.ceil(nextVisibleDays * 0.75))
+        : nextGranularity === 'week'
+          ? Math.max(42, Math.ceil(nextVisibleDays * 0.75))
+          : Math.max(14, Math.ceil(nextVisibleDays * 0.75));
+
+    const targetLeftDate = addDaysToDateKey(earliest, -2);
+    const alignedStart = alignStartForGranularity(
+      addDaysToDateKey(targetLeftDate, -leftBuffer),
+      nextGranularity
+    );
+    const nextScrollLeft = Math.max(0, diffDays(alignedStart, targetLeftDate) * fitPx);
+
+    pendingScrollRef.current = { scrollLeft: nextScrollLeft };
+    setWindowStart(alignedStart);
+    setPxPerDay(fitPx);
+  };
 
   const columnMap = useMemo(() => {
     const map = new Map<string, Column>();
@@ -205,23 +605,14 @@ export function CalendarTimelineView({
   }, [groupByColumn, columns, tasks, columnMap, todayKey]);
 
   const rangeLabel = useMemo(() => {
-    return `${formatShortDate(windowStart)} – ${formatShortDate(windowEnd)}`;
-  }, [windowStart, windowEnd]);
-
-  const handleFitTasks = () => {
-    if (tasks.length === 0) {
-      setWindowStart(addDaysToDateKey(todayKey, -5));
-      return;
+    if (granularity === 'month') {
+      return `${formatMonthYear(gridStartKey)} – ${formatMonthYear(gridEndKey)}`;
     }
-    let earliest = todayKey;
-    for (const t of tasks) {
-      const span = computeTaskSpan(t, todayKey);
-      if (span.minKey < earliest) earliest = span.minKey;
-    }
-    setWindowStart(addDaysToDateKey(earliest, -2));
-  };
+    return `${formatShortDate(gridStartKey)} – ${formatShortDate(gridEndKey)}`;
+  }, [granularity, gridStartKey, gridEndKey]);
 
-  const gridTotalWidth = spanDays * DAY_COL_WIDTH;
+  const todayOffsetDays = diffDays(gridStartKey, todayKey);
+  const showTodayMarkerLine = todayOffsetDays >= 0 && todayOffsetDays < totalDays;
 
   return (
     <div className="h-full flex flex-col bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
@@ -231,23 +622,23 @@ export function CalendarTimelineView({
           <div className="inline-flex items-center border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-950 overflow-hidden">
             <button
               type="button"
-              onClick={() => setWindowStart((prev) => addDaysToDateKey(prev, -7))}
-              aria-label="Previous week"
+              onClick={() => handlePanStep(-1)}
+              aria-label="Pan earlier"
               className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border-r border-slate-200 dark:border-slate-700"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
             <button
               type="button"
-              onClick={() => setWindowStart(addDaysToDateKey(todayKey, -5))}
+              onClick={() => jumpToDate(todayKey, 0.25)}
               className="px-3 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
             >
               Today
             </button>
             <button
               type="button"
-              onClick={() => setWindowStart((prev) => addDaysToDateKey(prev, 7))}
-              aria-label="Next week"
+              onClick={() => handlePanStep(1)}
+              aria-label="Pan later"
               className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border-l border-slate-200 dark:border-slate-700"
             >
               <ChevronRight className="w-4 h-4" />
@@ -269,7 +660,7 @@ export function CalendarTimelineView({
 
         <div className="flex flex-wrap items-center gap-3">
           {/* Legend */}
-          <div className="hidden xl:flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400">
+          <div className="hidden 2xl:flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400">
             <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
               <span className="w-2.5 h-2.5 rounded-sm bg-blue-600 dark:bg-blue-500 inline-block" />
               <span>Active</span>
@@ -292,25 +683,54 @@ export function CalendarTimelineView({
             </span>
           </div>
 
-          <div
-            role="group"
-            aria-label="Calendar day span"
-            className="flex items-center gap-0.5 p-0.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
-          >
-            {([14, 21, 30] as const).map((days) => (
+          {/* Granularity & Zoom Controls */}
+          <div className="flex items-center gap-1.5">
+            <div
+              role="group"
+              aria-label="Calendar zoom level"
+              className="flex items-center gap-0.5 p-0.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
+            >
+              {(['day', 'week', 'month'] as const).map((tier) => {
+                const label = tier === 'day' ? 'Days' : tier === 'week' ? 'Weeks' : 'Months';
+                return (
+                  <button
+                    key={tier}
+                    type="button"
+                    onClick={() => applyZoom(DEFAULT_PX_FOR_GRANULARITY[tier])}
+                    className={`px-2 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                      granularity === tier
+                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-semibold'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="inline-flex items-center border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-950 overflow-hidden">
               <button
-                key={days}
                 type="button"
-                onClick={() => setSpanDays(days)}
-                className={`px-2 py-1 text-xs font-mono tabular-nums rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                  spanDays === days
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-semibold'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-                }`}
+                onClick={() => applyZoom(pxPerDay / 1.35)}
+                disabled={pxPerDay <= MIN_PX_PER_DAY + 0.05}
+                aria-label="Zoom out calendar"
+                title="Zoom out (or scroll down over calendar)"
+                className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 border-r border-slate-200 dark:border-slate-700"
               >
-                {days}d
+                <ZoomOut className="w-3.5 h-3.5" />
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={() => applyZoom(pxPerDay * 1.35)}
+                disabled={pxPerDay >= MAX_PX_PER_DAY - 0.05}
+                aria-label="Zoom in calendar"
+                title="Zoom in (or scroll up over calendar)"
+                className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
 
           <button
@@ -327,7 +747,7 @@ export function CalendarTimelineView({
         </div>
       </div>
 
-      {/* Horizontal Day-by-Day Grid */}
+      {/* Horizontal Zoomable Timeline Grid */}
       {tasks.length === 0 ? (
         <div className="flex-1 flex items-center justify-center p-8 text-center">
           <div className="space-y-1.5">
@@ -340,56 +760,59 @@ export function CalendarTimelineView({
           </div>
         </div>
       ) : (
-        <div className="flex-1 overflow-auto">
+        <div ref={scrollContainerRef} className="flex-1 overflow-auto relative">
           <div style={{ minWidth: `${280 + gridTotalWidth}px` }}>
-            {/* Sticky Day Header */}
+            {/* Sticky Header */}
             <div className="sticky top-0 z-20 flex bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
-              <div className="sticky left-0 z-30 w-[260px] sm:w-[300px] shrink-0 px-4 py-2.5 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex items-center justify-between">
+              <div
+                ref={leftColRef}
+                className="sticky left-0 z-30 w-[260px] sm:w-[300px] shrink-0 px-4 py-2.5 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2"
+              >
                 <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
                   Task Window
                 </span>
-                <span className="text-[11px] font-mono tabular-nums text-slate-400">
-                  {tasks.length} {tasks.length === 1 ? 'row' : 'rows'}
+                <span className="text-[11px] font-mono tabular-nums text-slate-400 whitespace-nowrap">
+                  {tasks.length} {tasks.length === 1 ? 'row' : 'rows'} · Scroll to zoom
                 </span>
               </div>
 
               <div className="flex shrink-0">
-                {windowDays.map((dayKey, idx) => {
-                  const meta = formatDayMeta(dayKey);
-                  const isToday = dayKey === todayKey;
-                  const showMonth = idx === 0 || meta.isFirstOfMonth;
+                {buckets.map((bucket) => {
+                  const colWidth = bucket.days * pxPerDay;
                   return (
                     <div
-                      key={dayKey}
-                      style={{ width: `${DAY_COL_WIDTH}px` }}
-                      className={`shrink-0 py-1.5 px-1 text-center border-r border-slate-100 dark:border-slate-800/80 ${
-                        isToday
+                      key={bucket.key}
+                      style={{ width: `${colWidth}px` }}
+                      className={`shrink-0 py-1.5 px-1 text-center border-r border-slate-200/80 dark:border-slate-800/80 overflow-hidden ${
+                        bucket.isCurrent
                           ? 'bg-blue-50/90 dark:bg-blue-950/50'
-                          : meta.isWeekend
+                          : bucket.isWeekend
                             ? 'bg-slate-50/80 dark:bg-slate-950/40'
                             : ''
                       }`}
                     >
-                      <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400 dark:text-slate-500 h-3.5 leading-3">
-                        {showMonth ? meta.monthShort : ''}
+                      <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400 dark:text-slate-500 h-3.5 leading-3 truncate">
+                        {bucket.topLabel}
                       </div>
+                      {bucket.subLabel && (
+                        <div
+                          className={`text-[10px] font-medium truncate ${
+                            bucket.isCurrent
+                              ? 'text-blue-700 dark:text-blue-300'
+                              : 'text-slate-400 dark:text-slate-500'
+                          }`}
+                        >
+                          {bucket.subLabel}
+                        </div>
+                      )}
                       <div
-                        className={`text-[10px] font-medium ${
-                          isToday
-                            ? 'text-blue-700 dark:text-blue-300'
-                            : 'text-slate-400 dark:text-slate-500'
-                        }`}
-                      >
-                        {meta.weekday}
-                      </div>
-                      <div
-                        className={`text-xs font-mono tabular-nums ${
-                          isToday
+                        className={`text-xs font-mono tabular-nums truncate ${
+                          bucket.isCurrent
                             ? 'font-bold text-blue-700 dark:text-blue-300'
                             : 'font-medium text-slate-700 dark:text-slate-300'
                         }`}
                       >
-                        {meta.dayNum}
+                        {bucket.mainLabel}
                       </div>
                     </div>
                   );
@@ -398,7 +821,7 @@ export function CalendarTimelineView({
             </div>
 
             {/* Task Rows */}
-            <div>
+            <div className="relative">
               {rows.map((group) => (
                 <div key={group.column ? group.column.id : 'all'}>
                   {group.column && (
@@ -411,7 +834,14 @@ export function CalendarTimelineView({
                           {group.tasks.length}
                         </span>
                       </div>
-                      <div style={{ width: `${gridTotalWidth}px` }} className="shrink-0" />
+                      <div style={{ width: `${gridTotalWidth}px` }} className="shrink-0 relative">
+                        {showTodayMarkerLine && (
+                          <div
+                            style={{ left: `${(todayOffsetDays + 0.5) * pxPerDay}px` }}
+                            className="absolute top-0 bottom-0 w-px bg-blue-400/50 dark:bg-blue-500/40 pointer-events-none"
+                          />
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -422,6 +852,7 @@ export function CalendarTimelineView({
                     const msgCount = messageCounts[task.id] ?? 0;
                     const linkCount = task.links?.length ?? 0;
                     const milestones = task.milestones ?? [];
+                    const inset = pxPerDay >= 20 ? 3 : 1;
 
                     const renderSegment = (
                       segStart: string,
@@ -429,16 +860,14 @@ export function CalendarTimelineView({
                       className: string,
                       labelTitle: string
                     ) => {
-                      const rawStartIdx = diffDays(windowStart, segStart);
-                      const rawEndIdx = diffDays(windowStart, segEnd);
-                      if (rawEndIdx < 0 || rawStartIdx >= spanDays) return null;
+                      const rawStartIdx = diffDays(gridStartKey, segStart);
+                      const rawEndIdx = diffDays(gridStartKey, segEnd);
+                      if (rawEndIdx < 0 || rawStartIdx >= totalDays) return null;
                       const clippedStart = Math.max(0, rawStartIdx);
-                      const clippedEnd = Math.min(spanDays - 1, rawEndIdx);
-                      const leftPx = clippedStart * DAY_COL_WIDTH + 4;
-                      const widthPx = Math.max(
-                        DAY_COL_WIDTH - 8,
-                        (clippedEnd - clippedStart + 1) * DAY_COL_WIDTH - 8
-                      );
+                      const clippedEnd = Math.min(totalDays - 1, rawEndIdx);
+                      const leftPx = clippedStart * pxPerDay + inset;
+                      const rawWidth = (clippedEnd - clippedStart + 1) * pxPerDay - inset * 2;
+                      const widthPx = Math.max(8, rawWidth);
                       return (
                         <div
                           style={{ left: `${leftPx}px`, width: `${widthPx}px` }}
@@ -448,15 +877,15 @@ export function CalendarTimelineView({
                       );
                     };
 
-                    const minIdx = diffDays(windowStart, span.minKey);
-                    const maxIdx = diffDays(windowStart, span.maxKey);
+                    const minIdx = diffDays(gridStartKey, span.minKey);
+                    const maxIdx = diffDays(gridStartKey, span.maxKey);
                     const isCompletelyBefore = maxIdx < 0;
-                    const isCompletelyAfter = minIdx >= spanDays;
+                    const isCompletelyAfter = minIdx >= totalDays;
 
-                    const placedIdx = diffDays(windowStart, span.startKey);
-                    const dueIdx = task.dueDate ? diffDays(windowStart, task.dueDate) : -1;
+                    const placedIdx = diffDays(gridStartKey, span.startKey);
+                    const dueIdx = task.dueDate ? diffDays(gridStartKey, task.dueDate) : -1;
                     const completedIdx = span.completedKey
-                      ? diffDays(windowStart, span.completedKey)
+                      ? diffDays(gridStartKey, span.completedKey)
                       : -1;
 
                     return (
@@ -545,7 +974,7 @@ export function CalendarTimelineView({
                           </button>
                         </div>
 
-                        {/* Horizontal Day-by-Day Bar Cell */}
+                        {/* Horizontal Zoomable Bar Cell */}
                         <div
                           style={{ width: `${gridTotalWidth}px` }}
                           onClick={() => onSelectTask(task)}
@@ -559,32 +988,36 @@ export function CalendarTimelineView({
                           }}
                           className="relative shrink-0 cursor-pointer flex"
                         >
-                          {/* Background day columns */}
-                          {windowDays.map((dayKey) => {
-                            const meta = formatDayMeta(dayKey);
-                            const isToday = dayKey === todayKey;
-                            return (
-                              <div
-                                key={dayKey}
-                                style={{ width: `${DAY_COL_WIDTH}px` }}
-                                className={`h-full shrink-0 border-r border-slate-100 dark:border-slate-800/70 ${
-                                  isToday
-                                    ? 'bg-blue-50/40 dark:bg-blue-950/20'
-                                    : meta.isWeekend
-                                      ? 'bg-slate-50/50 dark:bg-slate-950/30'
-                                      : ''
-                                }`}
-                              />
-                            );
-                          })}
+                          {/* Background grid columns matching active granularity */}
+                          {buckets.map((bucket) => (
+                            <div
+                              key={bucket.key}
+                              style={{ width: `${bucket.days * pxPerDay}px` }}
+                              className={`h-full shrink-0 border-r border-slate-100 dark:border-slate-800/70 ${
+                                bucket.isCurrent
+                                  ? 'bg-blue-50/40 dark:bg-blue-950/20'
+                                  : bucket.isWeekend
+                                    ? 'bg-slate-50/50 dark:bg-slate-950/30'
+                                    : ''
+                              }`}
+                            />
+                          ))}
 
-                          {/* Off-screen jump badge if entire task span lies outside visible window */}
+                          {/* Crisp Today hairline across Week & Month views */}
+                          {showTodayMarkerLine && granularity !== 'day' && (
+                            <div
+                              style={{ left: `${(todayOffsetDays + 0.5) * pxPerDay}px` }}
+                              className="absolute top-0 bottom-0 w-px bg-blue-500/45 dark:bg-blue-400/45 pointer-events-none z-[1]"
+                            />
+                          )}
+
+                          {/* Off-screen jump button if entire task span lies outside rendered range */}
                           {(isCompletelyBefore || isCompletelyAfter) && (
                             <button
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setWindowStart(addDaysToDateKey(span.startKey, -2));
+                                jumpToDate(span.startKey, 0.2);
                               }}
                               className={`absolute top-1/2 -translate-y-1/2 px-2 py-0.5 text-[11px] font-mono tabular-nums text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 rounded hover:bg-blue-100 dark:hover:bg-blue-900/60 whitespace-nowrap ${
                                 isCompletelyBefore ? 'left-3' : 'right-3'
@@ -600,10 +1033,10 @@ export function CalendarTimelineView({
                           {!isCompletelyBefore && !isCompletelyAfter && (
                             (() => {
                               const gStart = Math.max(0, minIdx);
-                              const gEnd = Math.min(spanDays - 1, maxIdx);
+                              const gEnd = Math.min(totalDays - 1, maxIdx);
                               if (gEnd <= gStart) return null;
-                              const gLeft = gStart * DAY_COL_WIDTH + DAY_COL_WIDTH / 2;
-                              const gWidth = (gEnd - gStart) * DAY_COL_WIDTH;
+                              const gLeft = (gStart + 0.5) * pxPerDay;
+                              const gWidth = (gEnd - gStart) * pxPerDay;
                               return (
                                 <div
                                   style={{ left: `${gLeft}px`, width: `${gWidth}px` }}
@@ -646,22 +1079,24 @@ export function CalendarTimelineView({
                             )}
 
                           {/* Placed-on-column start anchor */}
-                          {placedIdx >= 0 && placedIdx < spanDays && (
+                          {placedIdx >= 0 && placedIdx < totalDays && (
                             <div
-                              style={{ left: `${placedIdx * DAY_COL_WIDTH + 8}px` }}
+                              style={{
+                                left: `${placedIdx * pxPerDay + Math.min(8, Math.max(2, pxPerDay * 0.2))}px`,
+                              }}
                               title={`Placed on ${colName}: ${span.startKey}`}
                               className="absolute top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-white border-2 border-slate-800 dark:border-white z-[2]"
                             />
                           )}
 
                           {/* Due date ring marker */}
-                          {task.dueDate && dueIdx >= 0 && dueIdx < spanDays && (
+                          {task.dueDate && dueIdx >= 0 && dueIdx < totalDays && (
                             <div
                               style={{
-                                left: `${dueIdx * DAY_COL_WIDTH + DAY_COL_WIDTH - 16}px`,
+                                left: `${(dueIdx + 0.5) * pxPerDay}px`,
                               }}
                               title={`Due date: ${task.dueDate}`}
-                              className={`absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full border-2 bg-white dark:bg-slate-900 z-[2] ${
+                              className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-2 bg-white dark:bg-slate-900 z-[2] ${
                                 !task.completed && task.dueDate < todayKey
                                   ? 'border-red-600 dark:border-red-400'
                                   : 'border-slate-700 dark:border-slate-200'
@@ -673,13 +1108,13 @@ export function CalendarTimelineView({
                           {task.completed &&
                             span.completedKey &&
                             completedIdx >= 0 &&
-                            completedIdx < spanDays && (
+                            completedIdx < totalDays && (
                               <div
                                 style={{
-                                  left: `${completedIdx * DAY_COL_WIDTH + DAY_COL_WIDTH - 20}px`,
+                                  left: `${(completedIdx + 0.5) * pxPerDay}px`,
                                 }}
                                 title={`Completed: ${span.completedKey}`}
-                                className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-emerald-700 dark:bg-emerald-400 text-white dark:text-slate-950 flex items-center justify-center z-[3]"
+                                className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-emerald-700 dark:bg-emerald-400 text-white dark:text-slate-950 flex items-center justify-center z-[3]"
                               >
                                 <Check className="w-2.5 h-2.5 stroke-[3]" />
                               </div>
@@ -687,9 +1122,9 @@ export function CalendarTimelineView({
 
                           {/* Important Dates / Milestones diamonds */}
                           {milestones.map((ms) => {
-                            const msIdx = diffDays(windowStart, ms.date);
-                            if (msIdx < 0 || msIdx >= spanDays) return null;
-                            const centerX = msIdx * DAY_COL_WIDTH + DAY_COL_WIDTH / 2;
+                            const msIdx = diffDays(gridStartKey, ms.date);
+                            if (msIdx < 0 || msIdx >= totalDays) return null;
+                            const centerX = (msIdx + 0.5) * pxPerDay;
                             return (
                               <div
                                 key={ms.id}
@@ -697,7 +1132,11 @@ export function CalendarTimelineView({
                                 title={`Milestone: ${ms.title} (${ms.date})`}
                                 className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-[4] flex items-center"
                               >
-                                <span className="w-3 h-3 rotate-45 bg-amber-500 dark:bg-amber-400 border-2 border-white dark:border-slate-900 block shadow-xs" />
+                                <span
+                                  className={`rotate-45 bg-amber-500 dark:bg-amber-400 border-2 border-white dark:border-slate-900 block shadow-xs ${
+                                    pxPerDay < 12 ? 'w-2.5 h-2.5' : 'w-3 h-3'
+                                  }`}
+                                />
                               </div>
                             );
                           })}
