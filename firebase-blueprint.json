@@ -38,6 +38,93 @@
       },
       "required": ["uid", "displayName", "addedBy", "createdAt", "updatedAt"]
     },
+    "WhitelistEntry": {
+      "title": "WhitelistEntry",
+      "description": "Admin-managed allowlist entry granting workspace access to a verified email address.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Lowercase normalized email address allowed to access Cadence.",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "label": {
+          "type": "string",
+          "description": "Optional admin note or group label (e.g. Period 3, Team Lead).",
+          "maxLength": 80
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether access is currently active for this email."
+        },
+        "addedBy": {
+          "type": "string",
+          "description": "UID of the admin or user who created this whitelist entry.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "inviteCode": {
+          "type": "string",
+          "description": "Optional workspace access code ID redeemed to join the whitelist.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]*$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["email", "label", "active", "addedBy", "createdAt", "updatedAt"]
+    },
+    "AccessCode": {
+      "title": "AccessCode",
+      "description": "Admin-generated workspace join code that automatically adds redeemers to the access whitelist.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Uppercase/alphanumeric join code document ID.",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "label": {
+          "type": "string",
+          "description": "Admin label applied to users who join with this code (e.g. Period 3 Roster).",
+          "maxLength": 80
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether the code can currently be used to join the whitelist."
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "UID of the admin who generated this access code.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["id", "label", "active", "createdBy", "createdAt", "updatedAt"]
+    },
     "EmailLookup": {
       "title": "EmailLookup",
       "description": "One-way SHA-256 hash mapping a normalized email address to a user UID without exposing plaintext PII.",
@@ -767,6 +854,14 @@
     "/admins/{adminUid}": {
       "schema": { "$ref": "#/entities/AdminRecord" },
       "description": "Global admin role registry."
+    },
+    "/whitelist/{emailKey}": {
+      "schema": { "$ref": "#/entities/WhitelistEntry" },
+      "description": "Admin-managed email access allowlist enforced on workspace initialization and writes."
+    },
+    "/accessCodes/{codeId}": {
+      "schema": { "$ref": "#/entities/AccessCode" },
+      "description": "Admin-generated workspace join codes redeemable to auto-add verified emails to /whitelist."
     },
     "/emailLookup/{emailHash}": {
       "schema": { "$ref": "#/entities/EmailLookup" },

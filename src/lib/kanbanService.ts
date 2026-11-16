@@ -21,6 +21,7 @@ import {
   BOOTSTRAP_ADMIN_EMAIL,
   ID_REGEX,
   LIMITS,
+  type AccessCode,
   type AdminRecord,
   type Board,
   type BoardInvite,
@@ -41,6 +42,8 @@ import {
   type TaskMilestone,
   type ThemeMode,
   type UserProfile,
+  type WhitelistAccessStatus,
+  type WhitelistEntry,
 } from '../types/kanban';
 
 export function getTodayDateKey(): string {
@@ -1903,3 +1906,368 @@ export async function revokeGlobalAdmin(targetUid: string): Promise<void> {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
+
+// -----------------------------------------------------------------------------
+// Workspace Access Whitelist & Join Access Codes
+// -----------------------------------------------------------------------------
+const EMAIL_KEY_REGEX = /^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/;
+const ACCESS_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+export function normalizeEmailKey(rawEmail: string): string {
+  const normalized = rawEmail.trim().toLowerCase();
+  if (
+    normalized.length < 3 ||
+    normalized.length > LIMITS.USER_EMAIL_MAX ||
+    !EMAIL_KEY_REGEX.test(normalized)
+  ) {
+    throw new Error(`Invalid email address: "${rawEmail.trim() || '(empty)'}".`);
+  }
+  return normalized;
+}
+
+export function normalizeAccessCodeId(rawCode: string): string {
+  const normalized = rawCode.trim().toUpperCase();
+  if (
+    normalized.length < LIMITS.ACCESS_CODE_MIN ||
+    normalized.length > LIMITS.ID_MAX ||
+    !ID_REGEX.test(normalized)
+  ) {
+    throw new Error(
+      `Access codes must be ${LIMITS.ACCESS_CODE_MIN}-${LIMITS.ID_MAX} characters using only letters, numbers, hyphens, or underscores.`
+    );
+  }
+  return normalized;
+}
+
+export function generateRandomAccessCode(prefix = 'CAD'): string {
+  const randomBytes = new Uint8Array(6);
+  crypto.getRandomValues(randomBytes);
+  let suffix = '';
+  for (let i = 0; i < randomBytes.length; i += 1) {
+    suffix += ACCESS_CODE_ALPHABET[randomBytes[i] % ACCESS_CODE_ALPHABET.length];
+  }
+  return `${prefix}-${suffix}`;
+}
+
+export async function checkUserWhitelistAccess(
+  user: User,
+  isAdminFlag = false
+): Promise<WhitelistAccessStatus> {
+  const rawEmail = user.email?.trim().toLowerCase() ?? '';
+  if (isAdminFlag) {
+    return { allowed: true, suspended: false, email: rawEmail };
+  }
+  if (!user.emailVerified || !rawEmail || !EMAIL_KEY_REGEX.test(rawEmail)) {
+    return { allowed: false, suspended: false, email: rawEmail };
+  }
+
+  const path = `whitelist/${rawEmail}`;
+  try {
+    const snap = await getDoc(doc(db, 'whitelist', rawEmail));
+    if (!snap.exists()) {
+      return { allowed: false, suspended: false, email: rawEmail };
+    }
+    const entry = snap.data() as WhitelistEntry;
+    if (entry.active === true) {
+      return { allowed: true, suspended: false, email: rawEmail };
+    }
+    return { allowed: false, suspended: true, email: rawEmail };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+}
+
+export async function redeemAccessCode(
+  user: User,
+  rawCode: string
+): Promise<{ codeId: string; label: string }> {
+  assertValidId(user.uid, 'userId');
+  if (!user.email || !user.emailVerified) {
+    throw new Error('A verified Google email address is required to redeem an access code.');
+  }
+
+  const emailKey = normalizeEmailKey(user.email);
+  const codeId = normalizeAccessCodeId(rawCode);
+
+  const whitelistPath = `whitelist/${emailKey}`;
+  try {
+    const existingSnap = await getDoc(doc(db, 'whitelist', emailKey));
+    if (existingSnap.exists()) {
+      const existingData = existingSnap.data() as WhitelistEntry;
+      if (existingData.active) {
+        return { codeId, label: existingData.label || '' };
+      }
+      throw new Error(
+        'Access for this email is currently paused by an administrator. Contact your admin to re-enable your account.'
+      );
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('currently paused')) {
+      throw error;
+    }
+    handleFirestoreError(error, OperationType.GET, whitelistPath);
+  }
+
+  const codePath = `accessCodes/${codeId}`;
+  let codeData: AccessCode | null = null;
+  try {
+    const codeSnap = await getDoc(doc(db, 'accessCodes', codeId));
+    if (!codeSnap.exists()) {
+      throw new Error('Access code not found. Double-check the code with your administrator.');
+    }
+    codeData = codeSnap.data() as AccessCode;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('Access code not found')) {
+      throw error;
+    }
+    handleFirestoreError(error, OperationType.GET, codePath);
+  }
+
+  if (!codeData.active) {
+    throw new Error('This access code is inactive or expired. Ask an administrator for a current code.');
+  }
+
+  const cleanLabel = sanitizeText(codeData.label || '', LIMITS.WHITELIST_LABEL_MAX);
+  try {
+    await setDoc(doc(db, 'whitelist', emailKey), {
+      email: emailKey,
+      label: cleanLabel,
+      active: true,
+      addedBy: user.uid,
+      inviteCode: codeId,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, whitelistPath);
+  }
+
+  return { codeId, label: cleanLabel };
+}
+
+export function subscribeWhitelist(onData: (entries: WhitelistEntry[]) => void): Unsubscribe {
+  return onSnapshot(
+    collection(db, 'whitelist'),
+    (snapshot) => {
+      const items = snapshot.docs.map((d) => d.data() as WhitelistEntry);
+      items.sort((a, b) => a.email.localeCompare(b.email));
+      onData(items);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'whitelist');
+    }
+  );
+}
+
+export async function upsertWhitelistEntry(
+  actorUid: string,
+  rawEmail: string,
+  label: string
+): Promise<{ email: string; updatedExisting: boolean }> {
+  assertValidId(actorUid, 'userId');
+  const emailKey = normalizeEmailKey(rawEmail);
+  const cleanLabel = sanitizeText(label, LIMITS.WHITELIST_LABEL_MAX);
+  const path = `whitelist/${emailKey}`;
+
+  try {
+    const ref = doc(db, 'whitelist', emailKey);
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      await updateDoc(ref, {
+        label: cleanLabel || (snap.data() as WhitelistEntry).label || '',
+        active: true,
+        updatedAt: serverTimestamp(),
+      });
+      return { email: emailKey, updatedExisting: true };
+    }
+    await setDoc(ref, {
+      email: emailKey,
+      label: cleanLabel,
+      active: true,
+      addedBy: actorUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return { email: emailKey, updatedExisting: false };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function bulkAddWhitelistEmails(
+  actorUid: string,
+  rawText: string,
+  label: string,
+  existingEntries: WhitelistEntry[]
+): Promise<{ added: number; reactivated: number; invalid: string[] }> {
+  assertValidId(actorUid, 'userId');
+  const cleanLabel = sanitizeText(label, LIMITS.WHITELIST_LABEL_MAX);
+  const tokens = rawText
+    .split(/[\s,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  const uniqueValid = new Set<string>();
+  const invalid: string[] = [];
+
+  for (const token of tokens) {
+    const lower = token.toLowerCase();
+    if (
+      lower.length >= 3 &&
+      lower.length <= LIMITS.USER_EMAIL_MAX &&
+      EMAIL_KEY_REGEX.test(lower)
+    ) {
+      uniqueValid.add(lower);
+    } else {
+      invalid.push(token);
+    }
+  }
+
+  const existingByEmail = new Map<string, WhitelistEntry>();
+  existingEntries.forEach((entry) => existingByEmail.set(entry.email, entry));
+
+  let added = 0;
+  let reactivated = 0;
+  const emails = Array.from(uniqueValid);
+
+  for (let i = 0; i < emails.length; i += 400) {
+    const chunk = emails.slice(i, i + 400);
+    const batch = writeBatch(db);
+    let ops = 0;
+
+    for (const emailKey of chunk) {
+      const existingEntry = existingByEmail.get(emailKey);
+      const ref = doc(db, 'whitelist', emailKey);
+      if (existingEntry) {
+        if (!existingEntry.active || (cleanLabel && cleanLabel !== existingEntry.label)) {
+          batch.update(ref, {
+            label: cleanLabel || existingEntry.label || '',
+            active: true,
+            updatedAt: serverTimestamp(),
+          });
+          reactivated += 1;
+          ops += 1;
+        }
+      } else {
+        batch.set(ref, {
+          email: emailKey,
+          label: cleanLabel,
+          active: true,
+          addedBy: actorUid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        added += 1;
+        ops += 1;
+      }
+    }
+
+    if (ops > 0) {
+      try {
+        await batch.commit();
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, 'whitelist');
+      }
+    }
+  }
+
+  return { added, reactivated, invalid };
+}
+
+export async function setWhitelistEntryActive(rawEmail: string, active: boolean): Promise<void> {
+  const emailKey = normalizeEmailKey(rawEmail);
+  const path = `whitelist/${emailKey}`;
+  try {
+    await updateDoc(doc(db, 'whitelist', emailKey), {
+      active,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function removeWhitelistEntry(rawEmail: string): Promise<void> {
+  const emailKey = normalizeEmailKey(rawEmail);
+  const path = `whitelist/${emailKey}`;
+  try {
+    await deleteDoc(doc(db, 'whitelist', emailKey));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export function subscribeAccessCodes(onData: (codes: AccessCode[]) => void): Unsubscribe {
+  return onSnapshot(
+    collection(db, 'accessCodes'),
+    (snapshot) => {
+      const items = snapshot.docs.map((d) => d.data() as AccessCode);
+      items.sort(
+        (a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0)
+      );
+      onData(items);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'accessCodes');
+    }
+  );
+}
+
+export async function createAccessCode(
+  actorUid: string,
+  label: string,
+  customCode?: string
+): Promise<string> {
+  assertValidId(actorUid, 'userId');
+  const cleanLabel = sanitizeText(label, LIMITS.WHITELIST_LABEL_MAX);
+  const codeId = customCode?.trim()
+    ? normalizeAccessCodeId(customCode)
+    : generateRandomAccessCode();
+
+  const path = `accessCodes/${codeId}`;
+  try {
+    const existingSnap = await getDoc(doc(db, 'accessCodes', codeId));
+    if (existingSnap.exists()) {
+      throw new Error(`Access code "${codeId}" already exists. Choose another code or leave blank to auto-generate.`);
+    }
+    await setDoc(doc(db, 'accessCodes', codeId), {
+      id: codeId,
+      label: cleanLabel,
+      active: true,
+      createdBy: actorUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('already exists')) {
+      throw error;
+    }
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+
+  return codeId;
+}
+
+export async function setAccessCodeActive(codeId: string, active: boolean): Promise<void> {
+  const cleanId = normalizeAccessCodeId(codeId);
+  const path = `accessCodes/${cleanId}`;
+  try {
+    await updateDoc(doc(db, 'accessCodes', cleanId), {
+      active,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteAccessCode(codeId: string): Promise<void> {
+  const cleanId = normalizeAccessCodeId(codeId);
+  const path = `accessCodes/${cleanId}`;
+  try {
+    await deleteDoc(doc(db, 'accessCodes', cleanId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+

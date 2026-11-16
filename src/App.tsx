@@ -11,11 +11,13 @@ import {
   Plus,
   Search,
   Settings,
+  ShieldCheck,
   Sun,
   Users,
   X,
 } from 'lucide-react';
-import { AdminPanelModal } from './components/AdminPanelModal';
+import { AccessDeniedView } from './components/AccessDeniedView';
+import { AdminPage } from './components/AdminPage';
 import { AllChatsModal } from './components/AllChatsModal';
 import { BoardModal } from './components/BoardModal';
 import { CalendarTimelineView } from './components/CalendarTimelineView';
@@ -33,11 +35,13 @@ import { TaskDetailModal } from './components/TaskDetailModal';
 import { auth } from './lib/firebase';
 import {
   checkIsAdmin,
+  checkUserWhitelistAccess,
   createColumn,
   createTask,
   ensureUserAndStarterWorkspace,
   getTodayDateKey,
   moveTask,
+  redeemAccessCode,
   subscribeAccessibleBoards,
   subscribeAllBoardsMessages,
   subscribeAllBoardsTasks,
@@ -84,7 +88,27 @@ function WorkspaceApp() {
   const [user, setUser] = useState<User | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isBootstrapAdmin, setIsBootstrapAdmin] = useState(false);
+  const [accessStatus, setAccessStatus] = useState<'checking' | 'granted' | 'denied'>('checking');
+  const [accessSuspended, setAccessSuspended] = useState(false);
+  const [accessGateError, setAccessGateError] = useState<string | null>(null);
+  const [pendingAccessCode, setPendingAccessCode] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get('access')?.trim().toUpperCase();
+    if (fromUrl) {
+      window.sessionStorage.setItem('cadence_pending_access', fromUrl);
+      params.delete('access');
+      const remaining = params.toString();
+      const nextUrl = remaining
+        ? `${window.location.pathname}?${remaining}`
+        : window.location.pathname;
+      window.history.replaceState({}, '', nextUrl);
+      return fromUrl;
+    }
+    return window.sessionStorage.getItem('cadence_pending_access') || null;
+  });
   const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [workspacePage, setWorkspacePage] = useState<'workspace' | 'admin'>('workspace');
   const [asyncError, setAsyncError] = useState<Error | null>(null);
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -127,7 +151,6 @@ function WorkspaceApp() {
     boardId?: string;
     inviteId?: string;
   } | null>(null);
-  const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const [createTaskOpen, setCreateTaskOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskModalFocusChat, setTaskModalFocusChat] = useState(false);
@@ -158,16 +181,75 @@ function WorkspaceApp() {
     window.localStorage.setItem('cadence_theme', theme);
   }, [theme]);
 
+  const verifyAndProvisionUser = async (nextUser: User, autoRedeemCode: string | null) => {
+    setAccessStatus('checking');
+    setAccessSuspended(false);
+    setAccessGateError(null);
+    setWorkspaceReady(false);
+
+    const adminStatus = await checkIsAdmin(nextUser);
+    let wlStatus = await checkUserWhitelistAccess(nextUser, adminStatus.isAdmin);
+
+    if (!wlStatus.allowed && !wlStatus.suspended && autoRedeemCode) {
+      try {
+        await redeemAccessCode(nextUser, autoRedeemCode);
+        window.sessionStorage.removeItem('cadence_pending_access');
+        setPendingAccessCode(null);
+        wlStatus = { allowed: true, suspended: false, email: wlStatus.email };
+      } catch (redeemErr) {
+        setAccessGateError(
+          redeemErr instanceof Error ? redeemErr.message : 'Unable to redeem access code.'
+        );
+      }
+    } else if (wlStatus.allowed && autoRedeemCode) {
+      window.sessionStorage.removeItem('cadence_pending_access');
+      setPendingAccessCode(null);
+    }
+
+    if (!wlStatus.allowed) {
+      setIsAdmin(false);
+      setIsBootstrapAdmin(false);
+      setAccessSuspended(wlStatus.suspended);
+      setAccessStatus('denied');
+      setWorkspaceReady(false);
+      return;
+    }
+
+    const ensured = await ensureUserAndStarterWorkspace(nextUser);
+    setProfile(ensured);
+    setIsAdmin(adminStatus.isAdmin);
+    setIsBootstrapAdmin(adminStatus.isBootstrapAdmin);
+    setAccessSuspended(false);
+    setAccessGateError(null);
+    setAccessStatus('granted');
+    if (ensured.theme) setTheme(ensured.theme);
+    if (ensured.activeBoardId) setActiveBoardId(ensured.activeBoardId);
+    setWorkspaceReady(true);
+
+    // Check URL for ?join=boardId&code=inviteId
+    const params = new URLSearchParams(window.location.search);
+    const joinBoardId = params.get('join');
+    const joinCode = params.get('code');
+    if (joinBoardId && joinCode) {
+      setJoinModalState({ boardId: joinBoardId, inviteId: joinCode });
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  };
+
   // Listen to Firebase Auth
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (nextUser) => {
       setUser(nextUser);
       setAuthReady(true);
       setWorkspaceReady(false);
+      setWorkspacePage('workspace');
 
       if (!nextUser) {
         setIsAdmin(false);
         setIsBootstrapAdmin(false);
+        setAccessStatus('checking');
+        setAccessSuspended(false);
+        setAccessGateError(null);
         setProfile(null);
         setBoards([]);
         setActiveBoardId(null);
@@ -182,30 +264,14 @@ function WorkspaceApp() {
       }
 
       try {
-        const [ensured, adminStatus] = await Promise.all([
-          ensureUserAndStarterWorkspace(nextUser),
-          checkIsAdmin(nextUser),
-        ]);
-        setProfile(ensured);
-        setIsAdmin(adminStatus.isAdmin);
-        setIsBootstrapAdmin(adminStatus.isBootstrapAdmin);
-        if (ensured.theme) setTheme(ensured.theme);
-        if (ensured.activeBoardId) setActiveBoardId(ensured.activeBoardId);
-        setWorkspaceReady(true);
-
-        // Check URL for ?join=boardId&code=inviteId
-        const params = new URLSearchParams(window.location.search);
-        const joinBoardId = params.get('join');
-        const joinCode = params.get('code');
-        if (joinBoardId && joinCode) {
-          setJoinModalState({ boardId: joinBoardId, inviteId: joinCode });
-          window.history.replaceState({}, '', window.location.pathname);
-        }
+        const storedCode = window.sessionStorage.getItem('cadence_pending_access');
+        await verifyAndProvisionUser(nextUser, storedCode || pendingAccessCode);
       } catch (err) {
         setAsyncError(err instanceof Error ? err : new Error(String(err)));
       }
     });
     return () => unsub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Subscribe to profile & accessible boards once workspace is provisioned
@@ -474,6 +540,7 @@ function WorkspaceApp() {
   };
 
   const handleSelectBoard = async (boardId: string) => {
+    setWorkspacePage('workspace');
     setActiveBoardId(boardId);
     setSelectedTaskId(null);
     setTaskModalFocusChat(false);
@@ -618,7 +685,35 @@ function WorkspaceApp() {
   }
 
   if (!user) {
-    return <SignInView theme={theme} onToggleTheme={handleToggleTheme} />;
+    return (
+      <SignInView
+        theme={theme}
+        pendingAccessCode={pendingAccessCode}
+        onToggleTheme={handleToggleTheme}
+      />
+    );
+  }
+
+  if (accessStatus === 'denied') {
+    return (
+      <AccessDeniedView
+        user={user}
+        suspended={accessSuspended}
+        initialAccessCode={pendingAccessCode}
+        initialError={accessGateError}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+        onAccessGranted={async () => {
+          window.sessionStorage.removeItem('cadence_pending_access');
+          setPendingAccessCode(null);
+          await verifyAndProvisionUser(user, null);
+        }}
+        onRecheckAccess={async () => {
+          await verifyAndProvisionUser(user, null);
+        }}
+        onSignOut={handleSignOut}
+      />
+    );
   }
 
   if (!workspaceReady) {
@@ -664,13 +759,13 @@ function WorkspaceApp() {
         profile={profile}
         userEmail={user.email}
         isAdmin={isAdmin}
-        isBootstrapAdmin={isBootstrapAdmin}
+        isAdminPageActive={workspacePage === 'admin' && isAdmin}
         mobileOpen={mobileSidebarOpen}
         onCloseMobile={() => setMobileSidebarOpen(false)}
         onSelectBoard={handleSelectBoard}
         onOpenNewBoard={() => setBoardModalState({ mode: 'create' })}
         onOpenJoinBoard={() => setJoinModalState({})}
-        onOpenAdminPanel={() => setAdminPanelOpen(true)}
+        onOpenAdminPanel={() => setWorkspacePage('admin')}
         onSignOut={handleSignOut}
       />
 
@@ -689,13 +784,17 @@ function WorkspaceApp() {
 
             <div className="flex items-center gap-2 text-sm min-w-0">
               <span className="text-slate-400 dark:text-slate-500 hidden sm:inline whitespace-nowrap">
-                Boards
+                {workspacePage === 'admin' && isAdmin ? 'Admin' : 'Boards'}
               </span>
               <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">/</span>
               <h1 className="font-display font-semibold text-slate-900 dark:text-slate-100 truncate">
-                {activeBoard ? activeBoard.title : 'Workspace'}
+                {workspacePage === 'admin' && isAdmin
+                  ? 'Workspace Access & Admin'
+                  : activeBoard
+                    ? activeBoard.title
+                    : 'Workspace'}
               </h1>
-              {isArchived && (
+              {workspacePage !== 'admin' && isArchived && (
                 <span className="text-xs font-medium text-amber-700 dark:text-amber-300 whitespace-nowrap">
                   · Archived
                 </span>
@@ -713,6 +812,24 @@ function WorkspaceApp() {
               <BookOpen className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Docs</span>
             </button>
+
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() =>
+                  setWorkspacePage((prev) => (prev === 'admin' ? 'workspace' : 'admin'))
+                }
+                aria-label="Workspace Admin and Whitelist"
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                  workspacePage === 'admin'
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Admin</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -740,7 +857,7 @@ function WorkspaceApp() {
               {allMessages.length > 0 && <span>· {allMessages.length}</span>}
             </button>
 
-            {activeBoard && (
+            {workspacePage !== 'admin' && activeBoard && (
               <button
                 type="button"
                 onClick={() => setShareModalOpen(true)}
@@ -753,7 +870,7 @@ function WorkspaceApp() {
               </button>
             )}
 
-            {activeBoard && (isAdmin || activeBoard.ownerId === user.uid) && (
+            {workspacePage !== 'admin' && activeBoard && (isAdmin || activeBoard.ownerId === user.uid) && (
               <button
                 type="button"
                 onClick={() => setBoardModalState({ mode: 'edit', board: activeBoard })}
@@ -774,7 +891,7 @@ function WorkspaceApp() {
               {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
 
-            {activeBoard && effectivePermissions.canCreateTasks && columns.length > 0 && (
+            {workspacePage !== 'admin' && activeBoard && effectivePermissions.canCreateTasks && columns.length > 0 && (
               <button
                 type="button"
                 onClick={() => setCreateTaskOpen(true)}
@@ -788,7 +905,7 @@ function WorkspaceApp() {
         </header>
 
         {/* Workspace Filter & Telemetry Bar */}
-        {activeBoard && (
+        {workspacePage !== 'admin' && activeBoard && (
           <div className="px-4 sm:px-6 py-3 border-b border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900/40 flex flex-wrap items-center justify-between gap-3 shrink-0">
             <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
               <div className="relative w-full sm:w-64">
@@ -907,7 +1024,15 @@ function WorkspaceApp() {
           </div>
         )}
 
-        {/* Main Workspace Canvas */}
+        {/* Main Workspace Canvas or Admin Page */}
+        {workspacePage === 'admin' && isAdmin ? (
+          <AdminPage
+            uid={user.uid}
+            isBootstrapAdmin={isBootstrapAdmin}
+            totalBoardsCount={boards.length}
+            onBackToWorkspace={() => setWorkspacePage('workspace')}
+          />
+        ) : (
         <main
           className={`flex-1 p-4 sm:p-6 ${
             activeBoard && viewMode === 'calendar'
@@ -1056,6 +1181,7 @@ function WorkspaceApp() {
             </div>
           )}
         </main>
+        )}
       </div>
 
       {/* Modals */}
@@ -1124,15 +1250,6 @@ function WorkspaceApp() {
           initialInviteId={joinModalState.inviteId}
           onJoined={handleSelectBoard}
           onClose={() => setJoinModalState(null)}
-        />
-      )}
-
-      {adminPanelOpen && isAdmin && (
-        <AdminPanelModal
-          uid={user.uid}
-          isBootstrapAdmin={isBootstrapAdmin}
-          totalBoardsCount={boards.length}
-          onClose={() => setAdminPanelOpen(false)}
         />
       )}
 

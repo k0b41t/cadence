@@ -34,6 +34,25 @@ service cloud.firestore {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]*$');
     }
 
+    function isValidEmailKey(emailKey) {
+      return emailKey is string
+        && emailKey.size() >= 3
+        && emailKey.size() <= 254
+        && emailKey == emailKey.lower()
+        && emailKey.matches('^[^@\\s/]+@[^@\\s/]+\\.[^@\\s/]+$');
+    }
+
+    function isWhitelistedEmail() {
+      return isVerifiedUser()
+        && request.auth.token.email is string
+        && exists(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower()))
+        && get(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())).data.active == true;
+    }
+
+    function isAllowedWorkspaceUser() {
+      return isAdmin() || isWhitelistedEmail();
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -127,6 +146,25 @@ service cloud.firestore {
       return data.uid is string && data.uid == adminUid && isValidId(data.uid)
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
         && data.addedBy is string && isValidId(data.addedBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWhitelistEntry(data, emailKey) {
+      return data.email is string && data.email == emailKey && isValidEmailKey(data.email)
+        && data.label is string && data.label.size() <= 80
+        && data.active is bool
+        && data.addedBy is string && isValidId(data.addedBy)
+        && (!('inviteCode' in data) || isValidOptionalId(data.inviteCode))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAccessCode(data, codeId) {
+      return data.id is string && data.id == codeId && isValidId(data.id) && data.id.size() >= 4
+        && data.label is string && data.label.size() <= 80
+        && data.active is bool
+        && data.createdBy is string && isValidId(data.createdBy)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -352,13 +390,94 @@ service cloud.firestore {
     }
 
     // -------------------------------------------------------------------------
+    // Admin-Generated Workspace Access Codes (No Non-Admin List)
+    // -------------------------------------------------------------------------
+    match /accessCodes/{codeId} {
+      allow get: if isSignedIn() && isValidId(codeId) && codeId.size() >= 4;
+      allow list: if isSignedIn() && isAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(codeId) && codeId.size() >= 4
+        && incoming().keys().hasAll(['id', 'label', 'active', 'createdBy', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['id', 'label', 'active', 'createdBy', 'createdAt', 'updatedAt'])
+        && isValidAccessCode(incoming(), codeId)
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(codeId) && codeId.size() >= 4
+        && isValidAccessCode(incoming(), codeId)
+        && incoming().id == existing().id
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['label', 'active', 'updatedAt'])
+        );
+
+      allow delete: if isAdmin() && isValidId(codeId);
+    }
+
+    // -------------------------------------------------------------------------
+    // Admin-Managed Access Whitelist (Zero-Trust Gate + PII Isolation)
+    // -------------------------------------------------------------------------
+    match /whitelist/{emailKey} {
+      allow get: if isSignedIn() && isValidEmailKey(emailKey) && (
+        isAdmin() ||
+        (isVerifiedUser() && request.auth.token.email is string && request.auth.token.email.lower() == emailKey)
+      );
+      allow list: if isSignedIn() && isAdmin();
+
+      allow create: if isValidEmailKey(emailKey)
+        && isValidWhitelistEntry(incoming(), emailKey)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          (
+            isAdmin()
+            && incoming().keys().hasAll(['email', 'label', 'active', 'addedBy', 'createdAt', 'updatedAt'])
+            && incoming().keys().hasOnly(['email', 'label', 'active', 'addedBy', 'inviteCode', 'createdAt', 'updatedAt'])
+            && incoming().addedBy == request.auth.uid
+          ) || (
+            isVerifiedUser()
+            && request.auth.token.email is string
+            && request.auth.token.email.lower() == emailKey
+            && incoming().keys().hasAll(['email', 'label', 'active', 'addedBy', 'inviteCode', 'createdAt', 'updatedAt'])
+            && incoming().keys().hasOnly(['email', 'label', 'active', 'addedBy', 'inviteCode', 'createdAt', 'updatedAt'])
+            && incoming().active == true
+            && incoming().addedBy == request.auth.uid
+            && isValidId(incoming().inviteCode)
+            && incoming().inviteCode.size() >= 4
+            && exists(/databases/$(database)/documents/accessCodes/$(incoming().inviteCode))
+            && get(/databases/$(database)/documents/accessCodes/$(incoming().inviteCode)).data.active == true
+            && incoming().label == get(/databases/$(database)/documents/accessCodes/$(incoming().inviteCode)).data.label
+          )
+        );
+
+      allow update: if isAdmin()
+        && isValidEmailKey(emailKey)
+        && isValidWhitelistEntry(incoming(), emailKey)
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['label', 'active', 'updatedAt'])
+        );
+
+      allow delete: if isAdmin() && isValidEmailKey(emailKey);
+    }
+
+    // -------------------------------------------------------------------------
     // Hashed Email Lookup (Zero Plaintext PII, No List)
     // -------------------------------------------------------------------------
     match /emailLookup/{emailHash} {
       allow get: if isSignedIn() && emailHash.size() == 64 && emailHash.matches('^[a-f0-9]{64}$');
       allow list: if false;
 
-      allow create: if isVerifiedUser()
+      allow create: if isAllowedWorkspaceUser()
         && emailHash.size() == 64 && emailHash.matches('^[a-f0-9]{64}$')
         && incoming().keys().hasAll(['emailHash', 'uid', 'displayName', 'updatedAt'])
         && incoming().keys().hasOnly(['emailHash', 'uid', 'displayName', 'updatedAt'])
@@ -366,7 +485,7 @@ service cloud.firestore {
         && incoming().uid == request.auth.uid
         && incoming().updatedAt == request.time;
 
-      allow update: if isVerifiedUser()
+      allow update: if isAllowedWorkspaceUser()
         && emailHash.size() == 64 && emailHash.matches('^[a-f0-9]{64}$')
         && existing().uid == request.auth.uid
         && isValidEmailLookup(incoming(), emailHash)
@@ -385,7 +504,7 @@ service cloud.firestore {
       allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
       allow list: if false;
 
-      allow create: if isVerifiedUser()
+      allow create: if isAllowedWorkspaceUser()
         && isValidId(userId)
         && isOwner(userId)
         && incoming().keys().hasAll(['uid', 'displayName', 'theme', 'createdAt', 'updatedAt'])
@@ -394,7 +513,7 @@ service cloud.firestore {
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
-      allow update: if isVerifiedUser()
+      allow update: if isAllowedWorkspaceUser()
         && isValidId(userId)
         && isOwner(userId)
         && isValidUserProfile(incoming(), userId)
@@ -413,7 +532,7 @@ service cloud.firestore {
         allow get: if isSignedIn() && isValidId(userId) && docId == 'info' && (isOwner(userId) || isAdmin());
         allow list: if false;
 
-        allow create: if isVerifiedUser()
+        allow create: if isAllowedWorkspaceUser()
           && isValidId(userId)
           && docId == 'info'
           && isOwner(userId)
@@ -423,7 +542,7 @@ service cloud.firestore {
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time;
 
-        allow update: if isVerifiedUser()
+        allow update: if isAllowedWorkspaceUser()
           && isValidId(userId)
           && docId == 'info'
           && isOwner(userId)
@@ -441,7 +560,7 @@ service cloud.firestore {
           && (isOwner(userId) || isAdmin() || isBoardOwner(boardId));
         allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
 
-        allow create: if isVerifiedUser()
+        allow create: if isAllowedWorkspaceUser()
           && isValidId(userId)
           && isValidId(boardId)
           && incoming().keys().hasAll(['boardId', 'userId', 'boardTitle', 'boardOwnerId', 'role', 'createdAt', 'updatedAt'])
@@ -460,7 +579,7 @@ service cloud.firestore {
             )
           );
 
-        allow update: if isVerifiedUser()
+        allow update: if isAllowedWorkspaceUser()
           && isValidId(userId)
           && isValidId(boardId)
           && isValidBoardRef(incoming(), userId, boardId)
@@ -472,7 +591,7 @@ service cloud.firestore {
           && (isAdmin() || isBoardOwner(boardId))
           && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'boardTitle', 'updatedAt']);
 
-        allow delete: if isVerifiedUser()
+        allow delete: if isAllowedWorkspaceUser()
           && isValidId(userId)
           && isValidId(boardId)
           && (isOwner(userId) || isAdmin() || isBoardOwner(boardId));
@@ -494,7 +613,7 @@ service cloud.firestore {
         resource.data.ownerId == request.auth.uid
       );
 
-      allow create: if isVerifiedUser()
+      allow create: if isAllowedWorkspaceUser()
         && isValidId(boardId)
         && incoming().keys().hasAll(['id', 'ownerId', 'title', 'description', 'status', 'createdAt', 'updatedAt'])
         && incoming().keys().hasOnly(['id', 'ownerId', 'ownerDisplayName', 'title', 'description', 'status', 'createdAt', 'updatedAt'])
@@ -504,7 +623,7 @@ service cloud.firestore {
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
-      allow update: if isVerifiedUser()
+      allow update: if isAllowedWorkspaceUser()
         && isValidId(boardId)
         && isValidBoard(incoming(), boardId)
         && incoming().id == existing().id
@@ -524,7 +643,7 @@ service cloud.firestore {
           )
         );
 
-      allow delete: if isVerifiedUser() && isValidId(boardId) && (isAdmin() || existing().ownerId == request.auth.uid);
+      allow delete: if isAllowedWorkspaceUser() && isValidId(boardId) && (isAdmin() || existing().ownerId == request.auth.uid);
 
       // -----------------------------------------------------------------------
       // Board Members Subcollection
@@ -538,7 +657,7 @@ service cloud.firestore {
           canAccessBoard(boardId)
         );
 
-        allow create: if isVerifiedUser()
+        allow create: if isAllowedWorkspaceUser()
           && isValidId(boardId)
           && isValidId(memberId)
           && incoming().keys().hasAll(['uid', 'boardId', 'ownerId', 'displayName', 'role', 'canView', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'createdAt', 'updatedAt'])
@@ -560,7 +679,7 @@ service cloud.firestore {
             )
           );
 
-        allow update: if isVerifiedUser()
+        allow update: if isAllowedWorkspaceUser()
           && isValidId(boardId)
           && isValidId(memberId)
           && isValidBoardMember(incoming(), boardId, memberId)
@@ -580,7 +699,7 @@ service cloud.firestore {
             'updatedAt'
           ]);
 
-        allow delete: if isVerifiedUser()
+        allow delete: if isAllowedWorkspaceUser()
           && isValidId(boardId)
           && isValidId(memberId)
           && (isAdmin() || isBoardOwner(boardId) || isOwner(memberId));
@@ -593,7 +712,7 @@ service cloud.firestore {
         allow get: if isSignedIn() && isValidId(boardId) && isValidId(inviteId);
         allow list: if isSignedIn() && (isBootstrapAdmin() || resource.data.ownerId == request.auth.uid);
 
-        allow create: if isVerifiedUser()
+        allow create: if isAllowedWorkspaceUser()
           && isValidId(boardId)
           && isValidId(inviteId)
           && incoming().keys().hasAll(['id', 'boardId', 'ownerId', 'createdBy', 'label', 'role', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'active', 'createdAt', 'updatedAt'])
@@ -606,7 +725,7 @@ service cloud.firestore {
           && incoming().ownerId == getBoard(boardId).data.ownerId
           && (isAdmin() || (isBoardOwner(boardId) && isBoardActive(boardId)));
 
-        allow update: if isVerifiedUser()
+        allow update: if isAllowedWorkspaceUser()
           && isValidId(boardId)
           && isValidId(inviteId)
           && isValidBoardInvite(incoming(), boardId, inviteId)
@@ -619,7 +738,7 @@ service cloud.firestore {
           && (isAdmin() || (isBoardOwner(boardId) && isBoardActive(boardId)))
           && incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt']);
 
-        allow delete: if isVerifiedUser()
+        allow delete: if isAllowedWorkspaceUser()
           && isValidId(boardId)
           && isValidId(inviteId)
           && (isAdmin() || isBoardOwner(boardId));
@@ -636,7 +755,7 @@ service cloud.firestore {
           canAccessBoard(boardId)
         );
 
-        allow create: if isVerifiedUser()
+        allow create: if isAllowedWorkspaceUser()
           && isValidId(boardId)
           && isValidId(columnId)
           && incoming().keys().hasAll(['id', 'boardId', 'ownerId', 'createdBy', 'title', 'position', 'wipLimit', 'createdAt', 'updatedAt'])
@@ -649,7 +768,7 @@ service cloud.firestore {
           && incoming().ownerId == getBoard(boardId).data.ownerId
           && (isAdmin() || (isBoardActive(boardId) && canManageColumnsOnBoard(boardId)));
 
-        allow update: if isVerifiedUser()
+        allow update: if isAllowedWorkspaceUser()
           && isValidId(boardId)
           && isValidId(columnId)
           && isValidColumn(incoming(), boardId, columnId)
@@ -666,7 +785,7 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly(['position', 'updatedAt'])
           );
 
-        allow delete: if isVerifiedUser()
+        allow delete: if isAllowedWorkspaceUser()
           && isValidId(boardId)
           && isValidId(columnId)
           && (isAdmin() || (isBoardActive(boardId) && canManageColumnsOnBoard(boardId)));
@@ -683,7 +802,7 @@ service cloud.firestore {
           canAccessBoard(boardId)
         );
 
-        allow create: if isVerifiedUser()
+        allow create: if isAllowedWorkspaceUser()
           && isValidId(boardId)
           && isValidId(taskId)
           && incoming().keys().hasAll(['id', 'boardId', 'columnId', 'ownerId', 'createdBy', 'assigneeId', 'title', 'description', 'priority', 'position', 'tags', 'dueDate', 'completed', 'createdAt', 'updatedAt'])
@@ -698,7 +817,7 @@ service cloud.firestore {
           && isValidAssignee(boardId, incoming().assigneeId)
           && (isAdmin() || (isBoardActive(boardId) && canCreateTasksOnBoard(boardId)));
 
-        allow update: if isVerifiedUser()
+        allow update: if isAllowedWorkspaceUser()
           && isValidId(boardId)
           && isValidId(taskId)
           && isValidTask(incoming(), boardId, taskId)
@@ -728,7 +847,7 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly(['notificationsEnabled', 'updatedAt'])
           );
 
-        allow delete: if isVerifiedUser()
+        allow delete: if isAllowedWorkspaceUser()
           && isValidId(boardId)
           && isValidId(taskId)
           && (isAdmin() || (isBoardActive(boardId) && canDeleteTasksOnBoard(boardId)));
@@ -744,7 +863,7 @@ service cloud.firestore {
             canAccessBoard(boardId)
           );
 
-          allow create: if isVerifiedUser()
+          allow create: if isAllowedWorkspaceUser()
             && isValidId(boardId)
             && isValidId(taskId)
             && isValidId(subtaskId)
@@ -759,7 +878,7 @@ service cloud.firestore {
             && exists(/databases/$(database)/documents/boards/$(boardId)/tasks/$(taskId))
             && (isAdmin() || (isBoardActive(boardId) && canCreateTasksOnBoard(boardId)));
 
-          allow update: if isVerifiedUser()
+          allow update: if isAllowedWorkspaceUser()
             && isValidId(boardId)
             && isValidId(taskId)
             && isValidId(subtaskId)
@@ -778,7 +897,7 @@ service cloud.firestore {
               incoming().diff(existing()).affectedKeys().hasOnly(['position', 'updatedAt'])
             );
 
-          allow delete: if isVerifiedUser()
+          allow delete: if isAllowedWorkspaceUser()
             && isValidId(boardId)
             && isValidId(taskId)
             && isValidId(subtaskId)
@@ -797,7 +916,7 @@ service cloud.firestore {
           canAccessBoard(boardId)
         );
 
-        allow create: if isVerifiedUser()
+        allow create: if isAllowedWorkspaceUser()
           && isValidId(boardId)
           && isValidId(messageId)
           && incoming().keys().hasAll(['id', 'boardId', 'taskId', 'taskTitle', 'ownerId', 'senderId', 'senderName', 'text', 'createdAt', 'updatedAt'])
@@ -813,7 +932,7 @@ service cloud.firestore {
 
         allow update: if false;
 
-        allow delete: if isVerifiedUser()
+        allow delete: if isAllowedWorkspaceUser()
           && isValidId(boardId)
           && isValidId(messageId)
           && (isAdmin() || (isBoardActive(boardId) && (isBoardOwner(boardId) || existing().senderId == request.auth.uid)));

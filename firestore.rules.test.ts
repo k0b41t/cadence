@@ -27,6 +27,7 @@ const CREATOR = { uid: 'creator_a', email: 'creator@example.com', email_verified
 const MEMBER_VIEWER = { uid: 'viewer_b', email: 'viewer@example.com', email_verified: true };
 const MEMBER_CONTRIB = { uid: 'contrib_c', email: 'contrib@example.com', email_verified: true };
 const OUTSIDER = { uid: 'outsider_d', email: 'outsider@example.com', email_verified: true };
+const UNWHITELISTED = { uid: 'blocked_e', email: 'blocked@example.com', email_verified: true };
 
 async function runTests() {
   testEnv = await initializeTestEnvironment({
@@ -133,6 +134,24 @@ async function runTests() {
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+    for (const allowedEmail of [CREATOR.email, MEMBER_VIEWER.email, MEMBER_CONTRIB.email, OUTSIDER.email]) {
+      await setDoc(doc(db, 'whitelist', allowedEmail), {
+        email: allowedEmail,
+        label: 'Test Cohort',
+        active: true,
+        addedBy: ADMIN.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    await setDoc(doc(db, 'accessCodes', 'CAD_INACTIVE'), {
+      id: 'CAD_INACTIVE',
+      label: 'Expired Cohort',
+      active: false,
+      createdBy: ADMIN.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
   });
 
   const dbAdmin = testEnv.authenticatedContext(ADMIN.uid, { email: ADMIN.email, email_verified: true }).firestore();
@@ -141,6 +160,7 @@ async function runTests() {
   const dbViewer = testEnv.authenticatedContext(MEMBER_VIEWER.uid, { email: MEMBER_VIEWER.email, email_verified: true }).firestore();
   const dbContrib = testEnv.authenticatedContext(MEMBER_CONTRIB.uid, { email: MEMBER_CONTRIB.email, email_verified: true }).firestore();
   const dbOutsider = testEnv.authenticatedContext(OUTSIDER.uid, { email: OUTSIDER.email, email_verified: true }).firestore();
+  const dbBlocked = testEnv.authenticatedContext(UNWHITELISTED.uid, { email: UNWHITELISTED.email, email_verified: true }).firestore();
 
   // 1. Admin Email Spoofing
   await assertFails(getDocs(collection(dbSpoof, 'boards')));
@@ -327,6 +347,41 @@ async function runTests() {
     })
   );
 
+  // 17. Unwhitelisted Access Bypass
+  await assertFails(
+    setDoc(doc(dbBlocked, 'users', UNWHITELISTED.uid), {
+      uid: UNWHITELISTED.uid,
+      displayName: 'Blocked User',
+      theme: 'light',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertFails(getDocs(collection(dbBlocked, 'whitelist')));
+  await assertFails(getDoc(doc(dbBlocked, 'whitelist', CREATOR.email)));
+  await assertFails(
+    setDoc(doc(dbBlocked, 'whitelist', UNWHITELISTED.email), {
+      email: UNWHITELISTED.email,
+      label: 'Self-added',
+      active: true,
+      addedBy: UNWHITELISTED.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertFails(getDocs(collection(dbBlocked, 'accessCodes')));
+  await assertFails(
+    setDoc(doc(dbBlocked, 'whitelist', UNWHITELISTED.email), {
+      email: UNWHITELISTED.email,
+      label: 'Expired Cohort',
+      active: true,
+      addedBy: UNWHITELISTED.uid,
+      inviteCode: 'CAD_INACTIVE',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+
   // Positive assertions: Admin sees all boards; Contributor creates task; Viewer posts task chat; Outsider redeems viewer invite atomically
   await assertSucceeds(getDocs(collection(dbAdmin, 'boards')));
   await assertSucceeds(getDoc(doc(dbAdmin, 'boards', 'board_1')));
@@ -399,6 +454,48 @@ async function runTests() {
       updatedAt: serverTimestamp(),
     })
   );
+  await assertSucceeds(getDoc(doc(dbBlocked, 'whitelist', UNWHITELISTED.email)));
+  await assertSucceeds(getDocs(collection(dbAdmin, 'whitelist')));
+  await assertSucceeds(
+    setDoc(doc(dbAdmin, 'whitelist', 'student1@orangeusd.org'), {
+      email: 'student1@orangeusd.org',
+      label: 'Period 2',
+      active: true,
+      addedBy: ADMIN.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(
+    updateDoc(doc(dbAdmin, 'whitelist', 'student1@orangeusd.org'), {
+      label: 'Period 3',
+      active: false,
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(deleteDoc(doc(dbAdmin, 'whitelist', 'student1@orangeusd.org')));
+  await assertSucceeds(
+    setDoc(doc(dbAdmin, 'accessCodes', 'CAD_SPRING26'), {
+      id: 'CAD_SPRING26',
+      label: 'Spring 26',
+      active: true,
+      createdBy: ADMIN.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(
+    setDoc(doc(dbBlocked, 'whitelist', UNWHITELISTED.email), {
+      email: UNWHITELISTED.email,
+      label: 'Spring 26',
+      active: true,
+      addedBy: UNWHITELISTED.uid,
+      inviteCode: 'CAD_SPRING26',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(deleteDoc(doc(dbAdmin, 'accessCodes', 'CAD_SPRING26')));
 
   await testEnv.cleanup();
 }

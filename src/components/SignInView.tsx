@@ -7,10 +7,11 @@ import { DocsModal } from './DocsModal';
 
 interface SignInViewProps {
   theme: ThemeMode;
+  pendingAccessCode?: string | null;
   onToggleTheme: () => void;
 }
 
-export function SignInView({ theme, onToggleTheme }: SignInViewProps) {
+export function SignInView({ theme, pendingAccessCode = null, onToggleTheme }: SignInViewProps) {
   const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [docsOpen, setDocsOpen] = useState(false);
@@ -89,6 +90,12 @@ export function SignInView({ theme, onToggleTheme }: SignInViewProps) {
                 Manage boards, custom workflow columns, WIP limits, checklists, and drag-and-drop priorities backed directly by Cloud Firestore.
               </p>
             </div>
+
+            {pendingAccessCode && (
+              <div className="text-xs text-blue-800 dark:text-blue-200 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-2.5">
+                Access code <span className="font-mono font-semibold">{pendingAccessCode}</span> detected. Sign in with Google to activate your workspace access.
+              </div>
+            )}
 
             {authError && (
               <div

@@ -32,6 +32,8 @@ export const LIMITS = {
   SUBTASK_TITLE_MAX: 140,
   MESSAGE_TEXT_MAX: 1000,
   INVITE_LABEL_MAX: 60,
+  WHITELIST_LABEL_MAX: 80,
+  ACCESS_CODE_MIN: 4,
   POSITION_MAX: 1000000,
 } as const;
 
@@ -121,6 +123,31 @@ export interface AdminRecord {
   addedBy: string;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
+}
+
+export interface WhitelistEntry {
+  email: string;
+  label: string;
+  active: boolean;
+  addedBy: string;
+  inviteCode?: string;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface AccessCode {
+  id: string;
+  label: string;
+  active: boolean;
+  createdBy: string;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface WhitelistAccessStatus {
+  allowed: boolean;
+  suspended: boolean;
+  email: string;
 }
 
 export interface UserProfile {
