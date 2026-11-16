@@ -97,6 +97,7 @@ coverage/
 .env*
 !.env.example
 .firebase/
+.firebaserc
 firebase-applet-config.json`,
       },
       {
@@ -145,7 +146,7 @@ git push`,
       'Architect Cadence as a static React SPA talking directly to Firebase Auth + Cloud Firestore + Hosting so everything runs free without billing.',
     snippets: [
       {
-        label: '.env.production (gitignored local config for your Spark project)',
+        label: '.env.local (gitignored config for both npm run dev & deploy:prod)',
         language: 'env',
         code: `VITE_FIREBASE_API_KEY="AIza..."
 VITE_FIREBASE_AUTH_DOMAIN="your-project-id.firebaseapp.com"
@@ -194,7 +195,7 @@ service cloud.firestore {
           'Create the Firebase project on the Spark (No-cost) plan.',
           'Authentication → Sign-in method → Enable Google (ensure localhost is an authorized domain).',
           'Firestore Database → Create database → keep the (default) database ID in Production mode.',
-          'Project Settings → Add Web App (</>) → paste those values into your gitignored .env.production file.',
+          'Project Settings → Add Web App (</>) → paste those values into a gitignored .env.local file in your project root (Vite loads .env.local for both npm run dev and npm run deploy:prod).',
           'Design firebase-blueprint.json and firestore.rules first: because browsers connect directly to Firestore, Security Rules are your backend bouncer (split PII into users/{uid}/private/info, index share invites with SHA-256 emailLookup, enforce server timestamps request.time, and lock every field with affectedKeys().hasOnly(...)).',
         ],
       },
@@ -252,7 +253,7 @@ npm run dev`,
         heading: '2. Common Windows npm Gotchas',
         paragraphs: [
           'If you see "\'vite\' is not recognized", it means you have not run npm install inside your project folder yet after cloning/pulling from GitHub.',
-          'Also note the difference between firebase (the React client SDK already listed in package.json) and firebase-tools (installed globally with npm install -g firebase-tools so the firebase deploy command works in cmd). Finally, keep esbuild at ^0.28.0 so Vite 8 resolves cleanly without ERESOLVE errors.',
+          'Also note the difference between firebase (the React client SDK already listed in package.json) and firebase-tools (installed globally with npm install -g firebase-tools so the firebase deploy command works in cmd). Keep esbuild at ^0.28.0 so Vite 8 resolves cleanly without ERESOLVE errors. (On npm 12+, non-fatal allowScripts warnings during npm install do not block vite build or tsc --noEmit.)',
         ],
       },
     ],
@@ -426,7 +427,8 @@ npm run deploy:prod`,
       {
         heading: '2. Deploying Live With npm run deploy:prod',
         paragraphs: [
-          'Running npm run deploy:prod first compiles your React app into static files inside dist/ (baking in your .env.production config), then uploads dist/ to Firebase Hosting and firestore.rules to Firestore—giving you a live HTTPS URL at https://<your-project-id>.web.app on the $0 Spark plan.',
+          'Running npm run deploy:prod first compiles your React app into static files inside dist/ (baking in your .env.local config), then uploads dist/ to Firebase Hosting and firestore.rules to Firestore—giving you a live HTTPS URL at https://<your-project-id>.web.app on the $0 Spark plan.',
+          'Note on URLs: Firebase Project IDs are globally unique worldwide. If your chosen display name (like "cadence") is already taken by another Firebase user, Firebase appends a short suffix (e.g. cadence-2a977) and hosts your default site at https://<project-id>.web.app. Keep .firebaserc in .gitignore so each developer runs firebase use <their-own-project-id> locally.',
         ],
       },
     ],
