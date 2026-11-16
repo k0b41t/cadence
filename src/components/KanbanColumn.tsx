@@ -1,6 +1,7 @@
-import { useState, type DragEvent } from 'react';
+import { useState, type CSSProperties, type DragEvent } from 'react';
 import { Plus, Settings2 } from 'lucide-react';
-import { LIMITS, type Column, type ColumnBgColor, type Task } from '../types/kanban';
+import { isPresetColumnColor, parseColumnColorToRgb } from '../lib/colorUtils';
+import { LIMITS, type Column, type PresetColumnBgColor, type Subtask, type Task } from '../types/kanban';
 import { TaskCard } from './TaskCard';
 
 interface KanbanColumnProps {
@@ -11,6 +12,7 @@ interface KanbanColumnProps {
   canManageColumns: boolean;
   assigneeNames: Record<string, string>;
   messageCounts: Record<string, number>;
+  subtasksByTask?: Record<string, Subtask[]>;
   draggedTaskId: string | null;
   dropTarget: { columnId: string; index: number } | null;
   onDragStartTask: (e: DragEvent<HTMLDivElement>, task: Task) => void;
@@ -19,11 +21,12 @@ interface KanbanColumnProps {
   onDropOnColumn: (e: DragEvent<HTMLElement>, columnId: string, index: number) => void;
   onSelectTask: (task: Task) => void;
   onToggleTaskComplete: (task: Task) => void;
+  onToggleSubtask?: (task: Task, subtask: Subtask) => void;
   onQuickCreateTask: (columnId: string, title: string) => Promise<void>;
   onOpenColumnSettings: (column: Column) => void;
 }
 
-const COLUMN_BG_MAP: Record<ColumnBgColor, { bg: string; border: string }> = {
+const COLUMN_BG_MAP: Record<PresetColumnBgColor, { bg: string; border: string }> = {
   amber: {
     bg: 'bg-amber-50/90 dark:bg-amber-950/35',
     border: 'border-amber-300/90 dark:border-amber-800/70',
@@ -58,6 +61,7 @@ export function KanbanColumn({
   canManageColumns,
   assigneeNames,
   messageCounts,
+  subtasksByTask,
   draggedTaskId,
   dropTarget,
   onDragStartTask,
@@ -66,6 +70,7 @@ export function KanbanColumn({
   onDropOnColumn,
   onSelectTask,
   onToggleTaskComplete,
+  onToggleSubtask,
   onQuickCreateTask,
   onOpenColumnSettings,
 }: KanbanColumnProps) {
@@ -79,7 +84,20 @@ export function KanbanColumn({
   const activeColorRule = (column.colorRules ?? [])
     .filter((r) => tasks.length >= r.threshold)
     .sort((a, b) => b.threshold - a.threshold)[0];
-  const colorStyles = activeColorRule ? COLUMN_BG_MAP[activeColorRule.color] : null;
+
+  const presetStyles =
+    activeColorRule && isPresetColumnColor(activeColorRule.color)
+      ? COLUMN_BG_MAP[activeColorRule.color]
+      : null;
+
+  const customRgb =
+    activeColorRule && !isPresetColumnColor(activeColorRule.color)
+      ? parseColumnColorToRgb(activeColorRule.color)
+      : null;
+
+  const customStyle = customRgb
+    ? ({ '--col-rgb': `${customRgb.r}, ${customRgb.g}, ${customRgb.b}` } as CSSProperties)
+    : undefined;
 
   const handleSubmitQuickAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,6 +116,7 @@ export function KanbanColumn({
   return (
     <section
       aria-label={column.title}
+      style={customStyle}
       onDragOver={(e) => {
         if (!canEditTasks) return;
         e.preventDefault();
@@ -113,13 +132,19 @@ export function KanbanColumn({
         onDropOnColumn(e, column.id, targetIndex);
       }}
       className={`w-[320px] shrink-0 flex flex-col max-h-full border rounded-xl transition-colors ${
-        colorStyles ? colorStyles.bg : 'bg-slate-100/80 dark:bg-slate-900/50'
+        presetStyles
+          ? presetStyles.bg
+          : customRgb
+            ? 'bg-[rgba(var(--col-rgb),0.14)] dark:bg-[rgba(var(--col-rgb),0.22)]'
+            : 'bg-slate-100/80 dark:bg-slate-900/50'
       } ${
         dropTarget?.columnId === column.id
           ? 'border-blue-500/70 dark:border-blue-500/60'
-          : colorStyles
-            ? colorStyles.border
-            : 'border-slate-200/90 dark:border-slate-800'
+          : presetStyles
+            ? presetStyles.border
+            : customRgb
+              ? 'border-[rgba(var(--col-rgb),0.45)] dark:border-[rgba(var(--col-rgb),0.55)]'
+              : 'border-slate-200/90 dark:border-slate-800'
       }`}
     >
       {/* Column Header */}
@@ -215,11 +240,13 @@ export function KanbanColumn({
                   canEdit={canEditTasks}
                   assigneeName={task.assigneeId ? assigneeNames[task.assigneeId] : undefined}
                   messageCount={messageCounts[task.id] ?? 0}
+                  subtasks={subtasksByTask?.[task.id]}
                   isDragging={draggedTaskId === task.id}
                   onDragStart={onDragStartTask}
                   onDragEnd={onDragEndTask}
                   onClick={onSelectTask}
                   onToggleComplete={onToggleTaskComplete}
+                  onToggleSubtask={onToggleSubtask}
                 />
               </div>
             );

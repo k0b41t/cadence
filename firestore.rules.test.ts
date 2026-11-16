@@ -391,6 +391,14 @@ async function runTests() {
   });
   await assertSucceeds(joinBatch.commit());
   await assertSucceeds(getDocs(query(collection(dbViewer, 'boards', 'board_1', 'tasks'), where('boardId', '==', 'board_1'))));
+  await assertSucceeds(
+    updateDoc(doc(dbCreator, 'boards', 'board_1', 'columns', 'col_1'), {
+      title: 'To Do',
+      wipLimit: 4,
+      colorRules: [{ threshold: 3, color: '#f59e0b' }, { threshold: 4, color: '#ef4444' }],
+      updatedAt: serverTimestamp(),
+    })
+  );
 
   await testEnv.cleanup();
 }

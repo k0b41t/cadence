@@ -14,6 +14,7 @@ import {
   writeBatch,
   type Unsubscribe,
 } from 'firebase/firestore';
+import { isValidColumnColorValue, normalizeColumnColorValue } from './colorUtils';
 import { db, handleFirestoreError, OperationType } from './firebase';
 import {
   BOARD_TEMPLATES,
@@ -153,15 +154,16 @@ function sanitizeTaskMilestones(milestones: TaskMilestone[] | undefined): TaskMi
   return cleaned;
 }
 
-const VALID_COL_COLORS: ColumnBgColor[] = ['slate', 'amber', 'red', 'emerald', 'blue', 'violet'];
-
 export function sanitizeColumnColorRules(rules: ColumnColorRule[] | undefined): ColumnColorRule[] {
   if (!rules || rules.length === 0) return [];
   const byThreshold = new Map<number, ColumnBgColor>();
   for (const item of rules) {
     if (!Number.isFinite(item.threshold)) continue;
     const threshold = Math.max(1, Math.min(LIMITS.COLUMN_WIP_MAX, Math.floor(item.threshold)));
-    const color: ColumnBgColor = VALID_COL_COLORS.includes(item.color) ? item.color : 'amber';
+    const color: ColumnBgColor =
+      typeof item.color === 'string' && isValidColumnColorValue(item.color)
+        ? normalizeColumnColorValue(item.color)
+        : 'amber';
     byThreshold.set(threshold, color);
   }
   return Array.from(byThreshold.entries())
@@ -625,6 +627,47 @@ export function subscribeSubtasks(
       handleFirestoreError(error, OperationType.LIST, path);
     }
   );
+}
+
+export function subscribeBoardSubtasks(
+  boardId: string,
+  taskIds: string[],
+  onData: (subtasksByTask: Record<string, Subtask[]>) => void
+): Unsubscribe {
+  if (taskIds.length === 0) {
+    onData({});
+    return () => {};
+  }
+
+  const byTask: Record<string, Subtask[]> = {};
+  const emit = () => {
+    onData({ ...byTask });
+  };
+
+  const unsubs = taskIds.map((taskId) => {
+    const path = `boards/${boardId}/tasks/${taskId}/subtasks`;
+    return onSnapshot(
+      collection(db, 'boards', boardId, 'tasks', taskId, 'subtasks'),
+      (snapshot) => {
+        const items = snapshot.docs.map((d) => d.data() as Subtask);
+        items.sort((a, b) => a.position - b.position);
+        byTask[taskId] = items;
+        emit();
+      },
+      (error) => {
+        if (error instanceof Error && error.message.includes('permission')) {
+          delete byTask[taskId];
+          emit();
+          return;
+        }
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+  });
+
+  return () => {
+    unsubs.forEach((u) => u());
+  };
 }
 
 export function subscribeBoardMembers(

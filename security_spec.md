@@ -17,7 +17,7 @@
 9. **Terminal State Locking**: Archived boards (`status == 'archived'`) block all non-admin updates to the board and all non-admin writes to columns, tasks, subtasks, messages, and invites.
 10. **Temporal Integrity & Immutability**: `createdAt == request.time` on create, immutable on update; `updatedAt == request.time` on create and update; `createdBy == request.auth.uid` on new task/column/subtask/invite creation.
 11. **Task Link & Milestone Integrity**: Task `links` are bounded to 8 items with `http(s)://` URLs (blocking `javascript:`/`data:` schemes), and `milestones`/`placedOnColumnAt`/`completedAt` enforce bounded `YYYY-MM-DD` dates and max 8 milestones.
-12. **Column Threshold Color & Notification Toggle Integrity**: Column `colorRules` are bounded to 6 rules with integer thresholds (`1..100`) and a strict color allowlist (`slate`, `amber`, `red`, `emerald`, `blue`, `violet`), and `Task.notificationsEnabled` is strictly boolean.
+12. **Column Threshold Color & Notification Toggle Integrity**: Column `colorRules` are bounded to 6 rules with integer thresholds (`1..100`) and either preset color tokens (`slate`, `amber`, `red`, `emerald`, `blue`, `violet`) or strict 7-char hex RGB strings (`^#[0-9a-fA-F]{6}$`), and `Task.notificationsEnabled` is strictly boolean.
 
 ## 2. The "Dirty Dozen" Adversarial Payloads
 

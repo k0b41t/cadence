@@ -41,9 +41,11 @@ import {
   subscribeAllBoardsTasks,
   subscribeBoardMembers,
   subscribeBoardMessages,
+  subscribeBoardSubtasks,
   subscribeColumns,
   subscribeTasks,
   subscribeUserProfile,
+  toggleSubtaskCompleted,
   toggleTaskCompleted,
   updateUserActiveBoard,
   updateUserTheme,
@@ -55,6 +57,7 @@ import {
   type BoardMember,
   type Column,
   type Priority,
+  type Subtask,
   type Task,
   type TaskMessage,
   type ThemeMode,
@@ -89,6 +92,7 @@ function WorkspaceApp() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [members, setMembers] = useState<BoardMember[]>([]);
   const [boardMessages, setBoardMessages] = useState<TaskMessage[]>([]);
+  const [subtasksByTask, setSubtasksByTask] = useState<Record<string, Subtask[]>>({});
   const [allMessages, setAllMessages] = useState<TaskMessage[]>([]);
   const [allTasks, setAllTasks] = useState<Task[]>([]);
 
@@ -105,6 +109,7 @@ function WorkspaceApp() {
   const [searchQuery, setSearchQuery] = useState('');
   const [priorityFilter, setPriorityFilter] = useState<'all' | Priority>('all');
   const [hideCompleted, setHideCompleted] = useState(false);
+  const [myTasksOnly, setMyTasksOnly] = useState(false);
 
   // Modals & UI drawers
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -167,6 +172,7 @@ function WorkspaceApp() {
         setTasks([]);
         setMembers([]);
         setBoardMessages([]);
+        setSubtasksByTask({});
         setAllMessages([]);
         setAllTasks([]);
         return;
@@ -248,6 +254,7 @@ function WorkspaceApp() {
       setTasks([]);
       setMembers([]);
       setBoardMessages([]);
+      setSubtasksByTask({});
       return;
     }
 
@@ -262,6 +269,19 @@ function WorkspaceApp() {
       unsubMessages();
     };
   }, [user, workspaceReady, activeBoardId]);
+
+  const taskIdsKey = useMemo(() => tasks.map((t) => t.id).sort().join(','), [tasks]);
+
+  // Subscribe to checklist subtasks for active board tasks
+  useEffect(() => {
+    if (!user || !workspaceReady || !activeBoardId || !taskIdsKey) {
+      setSubtasksByTask({});
+      return;
+    }
+    const taskIds = taskIdsKey.split(',').filter(Boolean);
+    const unsub = subscribeBoardSubtasks(activeBoardId, taskIds, setSubtasksByTask);
+    return () => unsub();
+  }, [user, workspaceReady, activeBoardId, taskIdsKey]);
 
   // Resolve cross-board task navigation from All Chats / Notifications modal
   useEffect(() => {
@@ -414,6 +434,7 @@ function WorkspaceApp() {
     const q = searchQuery.trim().toLowerCase();
     return tasks.filter((t) => {
       if (hideCompleted && t.completed) return false;
+      if (myTasksOnly && t.assigneeId !== user?.uid) return false;
       if (priorityFilter !== 'all' && t.priority !== priorityFilter) return false;
       if (q) {
         const matchesTitle = t.title.toLowerCase().includes(q);
@@ -426,7 +447,7 @@ function WorkspaceApp() {
       }
       return true;
     });
-  }, [tasks, hideCompleted, priorityFilter, searchQuery, assigneeNameMap]);
+  }, [tasks, hideCompleted, myTasksOnly, user?.uid, priorityFilter, searchQuery, assigneeNameMap]);
 
   const completedCount = useMemo(() => tasks.filter((t) => t.completed).length, [tasks]);
 
@@ -805,6 +826,7 @@ function WorkspaceApp() {
 
               <button
                 type="button"
+                aria-pressed={hideCompleted}
                 onClick={() => setHideCompleted(!hideCompleted)}
                 className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
                   hideCompleted
@@ -813,6 +835,19 @@ function WorkspaceApp() {
                 }`}
               >
                 {hideCompleted ? 'Completed hidden' : 'Hide completed'}
+              </button>
+
+              <button
+                type="button"
+                aria-pressed={myTasksOnly}
+                onClick={() => setMyTasksOnly(!myTasksOnly)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                  myTasksOnly
+                    ? 'bg-blue-50 dark:bg-blue-950/50 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300'
+                    : 'bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                }`}
+              >
+                My Tasks Only
               </button>
             </div>
 
@@ -928,6 +963,7 @@ function WorkspaceApp() {
                     canManageColumns={effectivePermissions.canManageColumns}
                     assigneeNames={assigneeNameMap}
                     messageCounts={messageCounts}
+                    subtasksByTask={subtasksByTask}
                     draggedTaskId={draggedTask?.id ?? null}
                     dropTarget={dropTarget}
                     onDragStartTask={handleDragStartTask}
@@ -940,6 +976,9 @@ function WorkspaceApp() {
                     }}
                     onToggleTaskComplete={(task) =>
                       toggleTaskCompleted(activeBoard.id, task.id, !task.completed)
+                    }
+                    onToggleSubtask={(task, sub) =>
+                      toggleSubtaskCompleted(activeBoard.id, task.id, sub.id, !sub.completed)
                     }
                     onQuickCreateTask={handleQuickCreateTask}
                     onOpenColumnSettings={(column) => setEditingColumnId(column.id)}

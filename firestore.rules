@@ -209,12 +209,17 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidColumnColorValue(color) {
+      return color in ['slate', 'amber', 'red', 'emerald', 'blue', 'violet']
+        || (color is string && color.size() == 7 && color.matches('^#[0-9a-fA-F]{6}$'));
+    }
+
     function isValidColumnColorRule(item) {
       return item is map
         && item.keys().hasAll(['threshold', 'color'])
         && item.keys().hasOnly(['threshold', 'color'])
         && item.threshold is number && item.threshold >= 1 && item.threshold <= 100
-        && item.color in ['slate', 'amber', 'red', 'emerald', 'blue', 'violet'];
+        && isValidColumnColorValue(item.color);
     }
 
     function isValidColumnColorRules(rules) {

@@ -1,5 +1,15 @@
-import { useEffect, useState } from 'react';
-import { ArrowLeft, ArrowRight, Plus, Sparkles, Trash2, X } from 'lucide-react';
+import { useEffect, useState, type CSSProperties } from 'react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  ChevronDown,
+  ChevronUp,
+  Plus,
+  Sparkles,
+  Trash2,
+  X,
+} from 'lucide-react';
+import { formatRgbLabel, parseColumnColorToRgb, rgbToHex } from '../lib/colorUtils';
 import {
   deleteColumnAndHandleTasks,
   reorderColumn,
@@ -13,6 +23,7 @@ import {
   type ColumnColorRule,
   type Task,
 } from '../types/kanban';
+import { RgbPalettePicker } from './RgbPalettePicker';
 
 interface ColumnSettingsModalProps {
   boardId: string;
@@ -21,15 +32,6 @@ interface ColumnSettingsModalProps {
   allTasks: Task[];
   onClose: () => void;
 }
-
-const COLOR_OPTIONS: Array<{ value: ColumnBgColor; label: string; swatchClass: string }> = [
-  { value: 'amber', label: 'Yellow / Amber', swatchClass: 'bg-amber-400 border-amber-500' },
-  { value: 'red', label: 'Red', swatchClass: 'bg-red-500 border-red-600' },
-  { value: 'emerald', label: 'Green', swatchClass: 'bg-emerald-500 border-emerald-600' },
-  { value: 'blue', label: 'Blue', swatchClass: 'bg-blue-500 border-blue-600' },
-  { value: 'violet', label: 'Purple', swatchClass: 'bg-violet-500 border-violet-600' },
-  { value: 'slate', label: 'Slate', swatchClass: 'bg-slate-400 border-slate-500' },
-];
 
 export function ColumnSettingsModal({
   boardId,
@@ -42,6 +44,9 @@ export function ColumnSettingsModal({
   const [wipLimit, setWipLimit] = useState(String(column.wipLimit));
   const [colorRules, setColorRules] = useState<ColumnColorRule[]>(() =>
     sanitizeColumnColorRules(column.colorRules)
+  );
+  const [expandedRuleIndex, setExpandedRuleIndex] = useState<number | null>(() =>
+    column.colorRules && column.colorRules.length > 0 ? 0 : null
   );
   const [submitting, setSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -69,20 +74,24 @@ export function ColumnSettingsModal({
       maxExisting > 0 ? maxExisting + 1 : parsedWipPreview > 1 ? parsedWipPreview - 1 : 3
     );
     const nextColor: ColumnBgColor =
-      parsedWipPreview > 0 && nextThreshold >= parsedWipPreview ? 'red' : 'amber';
+      parsedWipPreview > 0 && nextThreshold >= parsedWipPreview ? '#ef4444' : '#f59e0b';
+    const nextIdx = colorRules.length;
     setColorRules([...colorRules, { threshold: nextThreshold, color: nextColor }]);
+    setExpandedRuleIndex(nextIdx);
   };
 
   const handleApplyWipPreset = () => {
     if (parsedWipPreview <= 0) return;
     if (parsedWipPreview === 1) {
-      setColorRules([{ threshold: 1, color: 'red' }]);
+      setColorRules([{ threshold: 1, color: '#ef4444' }]);
+      setExpandedRuleIndex(0);
       return;
     }
     setColorRules([
-      { threshold: parsedWipPreview - 1, color: 'amber' },
-      { threshold: parsedWipPreview, color: 'red' },
+      { threshold: parsedWipPreview - 1, color: '#f59e0b' },
+      { threshold: parsedWipPreview, color: '#ef4444' },
     ]);
+    setExpandedRuleIndex(0);
   };
 
   const handleUpdateRule = (index: number, patch: Partial<ColumnColorRule>) => {
@@ -93,6 +102,11 @@ export function ColumnSettingsModal({
 
   const handleRemoveRule = (index: number) => {
     setColorRules((prev) => prev.filter((_, i) => i !== index));
+    setExpandedRuleIndex((prev) => {
+      if (prev === null) return null;
+      if (prev === index) return null;
+      return prev > index ? prev - 1 : prev;
+    });
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -229,56 +243,83 @@ export function ColumnSettingsModal({
             {colorRules.length > 0 ? (
               <div className="space-y-2">
                 {colorRules.map((rule, idx) => {
-                  const swatch =
-                    COLOR_OPTIONS.find((c) => c.value === rule.color)?.swatchClass ??
-                    'bg-amber-400 border-amber-500';
+                  const rgb = parseColumnColorToRgb(rule.color);
+                  const hex = rgbToHex(rgb.r, rgb.g, rgb.b);
+                  const isExpanded = expandedRuleIndex === idx;
                   return (
                     <div
                       key={idx}
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50"
+                      style={
+                        {
+                          '--rule-rgb': `${rgb.r}, ${rgb.g}, ${rgb.b}`,
+                          '--rule-hex': hex,
+                        } as CSSProperties
+                      }
+                      className="px-3 py-2 rounded-lg border transition-colors bg-[rgba(var(--rule-rgb),0.12)] dark:bg-[rgba(var(--rule-rgb),0.20)] border-[rgba(var(--rule-rgb),0.45)] dark:border-[rgba(var(--rule-rgb),0.50)]"
                     >
-                      <span className="text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                        Tasks ≥
-                      </span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={LIMITS.COLUMN_WIP_MAX}
-                        aria-label={`Task count threshold for rule ${idx + 1}`}
-                        value={rule.threshold}
-                        onChange={(e) =>
-                          handleUpdateRule(idx, {
-                            threshold: Math.max(
-                              1,
-                              Math.min(LIMITS.COLUMN_WIP_MAX, Number(e.target.value) || 1)
-                            ),
-                          })
-                        }
-                        className="w-16 px-2.5 py-1 text-xs font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
-                      />
-                      <span className={`w-3.5 h-3.5 rounded-sm border shrink-0 ${swatch}`} />
-                      <select
-                        value={rule.color}
-                        aria-label={`Background color for rule ${idx + 1}`}
-                        onChange={(e) =>
-                          handleUpdateRule(idx, { color: e.target.value as ColumnBgColor })
-                        }
-                        className="flex-1 px-2.5 py-1 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
-                      >
-                        {COLOR_OPTIONS.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveRule(idx)}
-                        aria-label={`Remove color rule ${idx + 1}`}
-                        className="p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400 shrink-0"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center justify-between gap-2.5">
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-xs font-medium text-slate-700 dark:text-slate-200 whitespace-nowrap">
+                            Tasks ≥
+                          </span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={LIMITS.COLUMN_WIP_MAX}
+                            aria-label={`Task count threshold for rule ${idx + 1}`}
+                            value={rule.threshold}
+                            onChange={(e) =>
+                              handleUpdateRule(idx, {
+                                threshold: Math.max(
+                                  1,
+                                  Math.min(LIMITS.COLUMN_WIP_MAX, Number(e.target.value) || 1)
+                                ),
+                              })
+                            }
+                            className="w-16 px-2.5 py-1 text-xs font-mono tabular-nums bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                          />
+                        </div>
+
+                        <div className="flex items-center gap-2 min-w-0">
+                          <button
+                            type="button"
+                            onClick={() => setExpandedRuleIndex(isExpanded ? null : idx)}
+                            aria-expanded={isExpanded}
+                            aria-label={`Pick custom RGB color for rule ${idx + 1}`}
+                            className="inline-flex items-center gap-2 px-2.5 py-1 text-xs bg-white/90 dark:bg-slate-900/90 hover:bg-white dark:hover:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md transition-colors whitespace-nowrap shrink-0"
+                          >
+                            <span
+                              aria-hidden="true"
+                              className="w-4 h-4 rounded-sm border border-slate-300 dark:border-slate-600 bg-[color:var(--rule-hex)] shrink-0"
+                            />
+                            <span className="font-mono tabular-nums text-[11px] text-slate-700 dark:text-slate-200">
+                              rgb({formatRgbLabel(rule.color)})
+                            </span>
+                            {isExpanded ? (
+                              <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
+                            ) : (
+                              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveRule(idx)}
+                            aria-label={`Remove color rule ${idx + 1}`}
+                            className="p-1 text-slate-500 hover:text-red-600 dark:text-slate-400 dark:hover:text-red-400 shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {isExpanded && (
+                        <RgbPalettePicker
+                          color={rule.color}
+                          ruleIndex={idx}
+                          onChange={(nextHex) => handleUpdateRule(idx, { color: nextHex })}
+                        />
+                      )}
                     </div>
                   );
                 })}

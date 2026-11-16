@@ -481,7 +481,7 @@
         },
         "colorRules": {
           "type": "array",
-          "description": "Up to 6 task-count threshold background color rules."
+          "description": "Up to 6 task-count threshold background color rules using preset tokens or #RRGGBB hex RGB strings."
         },
         "createdAt": {
           "type": "string",

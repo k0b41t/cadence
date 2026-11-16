@@ -1,17 +1,19 @@
-import type { DragEvent } from 'react';
-import { BellOff, Check, Circle, Flag, Link2, MessageSquare } from 'lucide-react';
-import type { Priority, Task } from '../types/kanban';
+import { useState, type DragEvent } from 'react';
+import { BellOff, Check, ChevronDown, Circle, Flag, Link2, MessageSquare } from 'lucide-react';
+import type { Priority, Subtask, Task } from '../types/kanban';
 
 interface TaskCardProps {
   task: Task;
   canEdit: boolean;
   assigneeName?: string;
   messageCount?: number;
+  subtasks?: Subtask[];
   isDragging: boolean;
   onDragStart: (e: DragEvent<HTMLDivElement>, task: Task) => void;
   onDragEnd: () => void;
   onClick: (task: Task) => void;
   onToggleComplete: (task: Task) => void;
+  onToggleSubtask?: (task: Task, subtask: Subtask) => void;
 }
 
 const PRIORITY_META: Record<Priority, { label: string; className: string }> = {
@@ -48,16 +50,21 @@ export function TaskCard({
   canEdit,
   assigneeName,
   messageCount = 0,
+  subtasks = [],
   isDragging,
   onDragStart,
   onDragEnd,
   onClick,
   onToggleComplete,
+  onToggleSubtask,
 }: TaskCardProps) {
+  const [checklistExpanded, setChecklistExpanded] = useState(false);
+
   const priorityInfo = PRIORITY_META[task.priority] ?? PRIORITY_META.medium;
   const due = formatDueDate(task.dueDate);
   const linkCount = task.links?.length ?? 0;
   const milestoneCount = task.milestones?.length ?? 0;
+  const completedSubtasks = subtasks.filter((s) => s.completed).length;
 
   return (
     <div
@@ -105,14 +112,45 @@ export function TaskCard({
         </button>
 
         <div className="min-w-0 flex-1 space-y-2">
-          <div
-            className={`text-sm font-medium leading-snug line-clamp-2 ${
-              task.completed
-                ? 'text-slate-400 dark:text-slate-500 line-through'
-                : 'text-slate-900 dark:text-slate-100'
-            }`}
-          >
-            {task.title}
+          <div className="flex items-start justify-between gap-2">
+            <div
+              className={`text-sm font-medium leading-snug line-clamp-2 ${
+                task.completed
+                  ? 'text-slate-400 dark:text-slate-500 line-through'
+                  : 'text-slate-900 dark:text-slate-100'
+              }`}
+            >
+              {task.title}
+            </div>
+
+            {subtasks.length > 0 && (
+              <button
+                type="button"
+                aria-expanded={checklistExpanded}
+                aria-label={
+                  checklistExpanded
+                    ? `Collapse checklist items for ${task.title}`
+                    : `Expand checklist items for ${task.title}`
+                }
+                title={`Checklist: ${completedSubtasks}/${subtasks.length}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setChecklistExpanded((prev) => !prev);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.stopPropagation();
+                  }
+                }}
+                className="p-0.5 -mr-1 -mt-0.5 text-slate-400 hover:text-slate-700 dark:text-slate-500 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors shrink-0"
+              >
+                <ChevronDown
+                  className={`w-4 h-4 transition-transform duration-150 ${
+                    checklistExpanded ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
+            )}
           </div>
 
           {task.description && (
@@ -206,6 +244,56 @@ export function TaskCard({
               </>
             )}
           </div>
+
+          {checklistExpanded && subtasks.length > 0 && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="pt-2 mt-1 border-t border-slate-100 dark:border-slate-800 space-y-1.5"
+            >
+              <div className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                Checklist · {completedSubtasks}/{subtasks.length}
+              </div>
+              <ul className="space-y-1">
+                {subtasks.map((sub) => (
+                  <li key={sub.id}>
+                    <button
+                      type="button"
+                      disabled={!canEdit || !onToggleSubtask}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (canEdit && onToggleSubtask) {
+                          onToggleSubtask(task, sub);
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.stopPropagation();
+                        }
+                      }}
+                      className="w-full flex items-center gap-2 text-left text-xs py-0.5 rounded hover:bg-slate-50 dark:hover:bg-slate-800/50 disabled:hover:bg-transparent disabled:cursor-default"
+                    >
+                      {sub.completed ? (
+                        <span className="w-3.5 h-3.5 rounded bg-emerald-600 dark:bg-emerald-500 text-white flex items-center justify-center shrink-0">
+                          <Check className="w-2.5 h-2.5 stroke-[3]" />
+                        </span>
+                      ) : (
+                        <span className="w-3.5 h-3.5 rounded border border-slate-300 dark:border-slate-600 shrink-0" />
+                      )}
+                      <span
+                        className={`truncate ${
+                          sub.completed
+                            ? 'text-slate-400 dark:text-slate-500 line-through'
+                            : 'text-slate-700 dark:text-slate-300'
+                        }`}
+                      >
+                        {sub.title}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -49,7 +49,8 @@ export interface TaskMilestone {
   date: string;
 }
 
-export type ColumnBgColor = 'slate' | 'amber' | 'red' | 'emerald' | 'blue' | 'violet';
+export type PresetColumnBgColor = 'slate' | 'amber' | 'red' | 'emerald' | 'blue' | 'violet';
+export type ColumnBgColor = PresetColumnBgColor | (string & {});
 
 export interface ColumnColorRule {
   threshold: number;
