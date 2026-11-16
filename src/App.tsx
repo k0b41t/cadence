@@ -1,0 +1,892 @@
+import { useEffect, useMemo, useState, type DragEvent } from 'react';
+import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
+import {
+  Menu,
+  Moon,
+  Plus,
+  Search,
+  Settings,
+  Sun,
+  Users,
+  X,
+} from 'lucide-react';
+import { AdminPanelModal } from './components/AdminPanelModal';
+import { BoardModal } from './components/BoardModal';
+import { ColumnSettingsModal } from './components/ColumnSettingsModal';
+import { CreateTaskModal } from './components/CreateTaskModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { JoinBoardModal } from './components/JoinBoardModal';
+import { KanbanColumn } from './components/KanbanColumn';
+import { ShareBoardModal } from './components/ShareBoardModal';
+import { Sidebar } from './components/Sidebar';
+import { SignInView } from './components/SignInView';
+import { TaskDetailModal } from './components/TaskDetailModal';
+import { auth } from './lib/firebase';
+import {
+  checkIsAdmin,
+  createColumn,
+  createTask,
+  ensureUserAndStarterWorkspace,
+  moveTask,
+  subscribeAccessibleBoards,
+  subscribeBoardMembers,
+  subscribeColumns,
+  subscribeTasks,
+  subscribeUserProfile,
+  toggleTaskCompleted,
+  updateUserActiveBoard,
+  updateUserTheme,
+} from './lib/kanbanService';
+import {
+  LIMITS,
+  ROLE_PRESETS,
+  type Board,
+  type BoardMember,
+  type Column,
+  type Priority,
+  type Task,
+  type ThemeMode,
+  type UserProfile,
+} from './types/kanban';
+
+function computeInsertPosition(sortedTasks: Task[], insertIndex: number): number {
+  if (sortedTasks.length === 0) return 1000;
+  if (insertIndex <= 0) {
+    return Math.max(1, sortedTasks[0].position / 2);
+  }
+  if (insertIndex >= sortedTasks.length) {
+    return Math.min(LIMITS.POSITION_MAX, sortedTasks[sortedTasks.length - 1].position + 1000);
+  }
+  const prev = sortedTasks[insertIndex - 1].position;
+  const next = sortedTasks[insertIndex].position;
+  return (prev + next) / 2;
+}
+
+function WorkspaceApp() {
+  const [authReady, setAuthReady] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isBootstrapAdmin, setIsBootstrapAdmin] = useState(false);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [asyncError, setAsyncError] = useState<Error | null>(null);
+
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [boards, setBoards] = useState<Board[]>([]);
+  const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
+  const [columns, setColumns] = useState<Column[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [members, setMembers] = useState<BoardMember[]>([]);
+
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = window.localStorage.getItem('cadence_theme');
+      if (saved === 'dark' || saved === 'light') return saved;
+    }
+    return 'light';
+  });
+
+  // Filters & search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [priorityFilter, setPriorityFilter] = useState<'all' | Priority>('all');
+  const [hideCompleted, setHideCompleted] = useState(false);
+
+  // Modals & UI drawers
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [boardModalState, setBoardModalState] = useState<{
+    mode: 'create' | 'edit';
+    board?: Board;
+  } | null>(null);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [joinModalState, setJoinModalState] = useState<{
+    boardId?: string;
+    inviteId?: string;
+  } | null>(null);
+  const [adminPanelOpen, setAdminPanelOpen] = useState(false);
+  const [createTaskOpen, setCreateTaskOpen] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
+
+  // Add column inline composer
+  const [addingColumn, setAddingColumn] = useState(false);
+  const [newColumnTitle, setNewColumnTitle] = useState('');
+  const [savingColumn, setSavingColumn] = useState(false);
+
+  // Drag state
+  const [draggedTask, setDraggedTask] = useState<Task | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ columnId: string; index: number } | null>(null);
+
+  // Sync theme to <html>
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === 'dark') {
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+    }
+    window.localStorage.setItem('cadence_theme', theme);
+  }, [theme]);
+
+  // Listen to Firebase Auth
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (nextUser) => {
+      setUser(nextUser);
+      setAuthReady(true);
+      setWorkspaceReady(false);
+
+      if (!nextUser) {
+        setIsAdmin(false);
+        setIsBootstrapAdmin(false);
+        setProfile(null);
+        setBoards([]);
+        setActiveBoardId(null);
+        setColumns([]);
+        setTasks([]);
+        setMembers([]);
+        return;
+      }
+
+      try {
+        const [ensured, adminStatus] = await Promise.all([
+          ensureUserAndStarterWorkspace(nextUser),
+          checkIsAdmin(nextUser),
+        ]);
+        setProfile(ensured);
+        setIsAdmin(adminStatus.isAdmin);
+        setIsBootstrapAdmin(adminStatus.isBootstrapAdmin);
+        if (ensured.theme) setTheme(ensured.theme);
+        if (ensured.activeBoardId) setActiveBoardId(ensured.activeBoardId);
+        setWorkspaceReady(true);
+
+        // Check URL for ?join=boardId&code=inviteId
+        const params = new URLSearchParams(window.location.search);
+        const joinBoardId = params.get('join');
+        const joinCode = params.get('code');
+        if (joinBoardId && joinCode) {
+          setJoinModalState({ boardId: joinBoardId, inviteId: joinCode });
+          window.history.replaceState({}, '', window.location.pathname);
+        }
+      } catch (err) {
+        setAsyncError(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Subscribe to profile & accessible boards once workspace is provisioned
+  useEffect(() => {
+    if (!user || !workspaceReady) return;
+    const unsubProfile = subscribeUserProfile(user.uid, (p) => {
+      if (p) {
+        setProfile(p);
+        setTheme(p.theme);
+      }
+    });
+    const unsubBoards = subscribeAccessibleBoards(user.uid, isBootstrapAdmin, (nextBoards) => {
+      setBoards(nextBoards);
+      setActiveBoardId((prev) => {
+        if (prev && nextBoards.some((b) => b.id === prev)) return prev;
+        const preferred =
+          profile?.activeBoardId && nextBoards.some((b) => b.id === profile.activeBoardId)
+            ? profile.activeBoardId
+            : nextBoards.find((b) => b.status === 'active')?.id ?? nextBoards[0]?.id ?? null;
+        return preferred;
+      });
+    });
+
+    return () => {
+      unsubProfile();
+      unsubBoards();
+    };
+  }, [user, workspaceReady, isBootstrapAdmin]);
+
+  // Subscribe to columns, tasks, and members for active board
+  useEffect(() => {
+    if (!user || !workspaceReady || !activeBoardId) {
+      setColumns([]);
+      setTasks([]);
+      setMembers([]);
+      return;
+    }
+
+    const unsubCols = subscribeColumns(activeBoardId, setColumns);
+    const unsubTasks = subscribeTasks(activeBoardId, setTasks);
+    const unsubMembers = subscribeBoardMembers(activeBoardId, setMembers);
+    return () => {
+      unsubCols();
+      unsubTasks();
+      unsubMembers();
+    };
+  }, [user, workspaceReady, activeBoardId]);
+
+  if (asyncError) {
+    throw asyncError;
+  }
+
+  const activeBoard = useMemo(
+    () => boards.find((b) => b.id === activeBoardId) ?? null,
+    [boards, activeBoardId]
+  );
+
+  const selectedTask = useMemo(
+    () => tasks.find((t) => t.id === selectedTaskId) ?? null,
+    [tasks, selectedTaskId]
+  );
+
+  const editingColumn = useMemo(
+    () => columns.find((c) => c.id === editingColumnId) ?? null,
+    [columns, editingColumnId]
+  );
+
+  // Compute caller's effective permissions on activeBoard
+  const effectivePermissions = useMemo(() => {
+    if (!activeBoard || !user) {
+      return {
+        canCreateTasks: false,
+        canEditTasks: false,
+        canDeleteTasks: false,
+        canManageColumns: false,
+        canManageSharing: false,
+        roleLabel: 'Viewer',
+      };
+    }
+
+    const isBoardArchived = activeBoard.status === 'archived';
+    if (isAdmin) {
+      return {
+        canCreateTasks: true,
+        canEditTasks: true,
+        canDeleteTasks: true,
+        canManageColumns: true,
+        canManageSharing: true,
+        roleLabel: 'Admin',
+      };
+    }
+
+    if (activeBoard.ownerId === user.uid) {
+      return {
+        canCreateTasks: !isBoardArchived,
+        canEditTasks: !isBoardArchived,
+        canDeleteTasks: !isBoardArchived,
+        canManageColumns: !isBoardArchived,
+        canManageSharing: true,
+        roleLabel: 'Creator',
+      };
+    }
+
+    const myMembership = members.find((m) => m.uid === user.uid);
+    if (!myMembership) {
+      return {
+        canCreateTasks: false,
+        canEditTasks: false,
+        canDeleteTasks: false,
+        canManageColumns: false,
+        canManageSharing: false,
+        roleLabel: 'Viewer',
+      };
+    }
+
+    return {
+      canCreateTasks: !isBoardArchived && myMembership.canCreateTasks,
+      canEditTasks: !isBoardArchived && myMembership.canEditTasks,
+      canDeleteTasks: !isBoardArchived && myMembership.canDeleteTasks,
+      canManageColumns: !isBoardArchived && myMembership.canManageColumns,
+      canManageSharing: false,
+      roleLabel: ROLE_PRESETS[myMembership.role]?.label ?? myMembership.role,
+    };
+  }, [activeBoard, user, isAdmin, members]);
+
+  // Assignee dropdown options (Creator + Members)
+  const assigneeOptions = useMemo(() => {
+    if (!activeBoard) return [];
+    const options: Array<{ uid: string; label: string }> = [];
+    const seen = new Set<string>();
+
+    if (user && activeBoard.ownerId === user.uid) {
+      options.push({ uid: user.uid, label: `${profile?.displayName || 'You'} (Creator)` });
+      seen.add(user.uid);
+    } else {
+      options.push({ uid: activeBoard.ownerId, label: 'Board Creator' });
+      seen.add(activeBoard.ownerId);
+    }
+
+    members.forEach((m) => {
+      if (!seen.has(m.uid)) {
+        options.push({ uid: m.uid, label: m.displayName });
+        seen.add(m.uid);
+      }
+    });
+
+    if (user && !seen.has(user.uid)) {
+      options.push({ uid: user.uid, label: profile?.displayName || 'You' });
+    }
+
+    return options;
+  }, [activeBoard, members, user, profile]);
+
+  const assigneeNameMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    assigneeOptions.forEach((opt) => {
+      map[opt.uid] = opt.label;
+    });
+    return map;
+  }, [assigneeOptions]);
+
+  const filteredTasks = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return tasks.filter((t) => {
+      if (hideCompleted && t.completed) return false;
+      if (priorityFilter !== 'all' && t.priority !== priorityFilter) return false;
+      if (q) {
+        const matchesTitle = t.title.toLowerCase().includes(q);
+        const matchesDesc = t.description.toLowerCase().includes(q);
+        const matchesTag = t.tags.some((tag) => tag.toLowerCase().includes(q));
+        if (!matchesTitle && !matchesDesc && !matchesTag) return false;
+      }
+      return true;
+    });
+  }, [tasks, hideCompleted, priorityFilter, searchQuery]);
+
+  const completedCount = useMemo(() => tasks.filter((t) => t.completed).length, [tasks]);
+
+  const handleToggleTheme = async () => {
+    const next: ThemeMode = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    if (user && workspaceReady) {
+      await updateUserTheme(user.uid, next);
+    }
+  };
+
+  const handleSelectBoard = async (boardId: string) => {
+    setActiveBoardId(boardId);
+    setSelectedTaskId(null);
+    setEditingColumnId(null);
+    if (user) {
+      await updateUserActiveBoard(user.uid, boardId);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await signOut(auth);
+  };
+
+  const handleQuickCreateTask = async (columnId: string, title: string) => {
+    if (!user || !activeBoard || !effectivePermissions.canCreateTasks) return;
+    const colTasks = tasks.filter((t) => t.columnId === columnId);
+    const maxPos = colTasks.reduce((m, t) => Math.max(m, t.position), 0);
+    await createTask(user.uid, activeBoard, columnId, {
+      title,
+      position: maxPos + 1000,
+      priority: 'medium',
+    });
+  };
+
+  const handleCreateColumn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (
+      !user ||
+      !activeBoard ||
+      !newColumnTitle.trim() ||
+      savingColumn ||
+      !effectivePermissions.canManageColumns
+    ) {
+      return;
+    }
+    setSavingColumn(true);
+    try {
+      const maxPos = columns.reduce((m, c) => Math.max(m, c.position), 0);
+      await createColumn(user.uid, activeBoard, newColumnTitle, maxPos + 1000, 0);
+      setNewColumnTitle('');
+      setAddingColumn(false);
+    } finally {
+      setSavingColumn(false);
+    }
+  };
+
+  const handleDragStartTask = (e: DragEvent<HTMLDivElement>, task: Task) => {
+    if (!effectivePermissions.canEditTasks) return;
+    setDraggedTask(task);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', task.id);
+  };
+
+  const handleDragEndTask = () => {
+    setDraggedTask(null);
+    setDropTarget(null);
+  };
+
+  const handleDragOverColumn = (
+    e: DragEvent<HTMLElement>,
+    columnId: string,
+    index: number
+  ) => {
+    e.preventDefault();
+    if (!draggedTask || !effectivePermissions.canEditTasks) return;
+    setDropTarget((prev) =>
+      prev && prev.columnId === columnId && prev.index === index
+        ? prev
+        : { columnId, index }
+    );
+  };
+
+  const handleDropOnColumn = async (
+    e: DragEvent<HTMLElement>,
+    targetColumnId: string,
+    insertIndex: number
+  ) => {
+    e.preventDefault();
+    if (!draggedTask || !activeBoardId || !effectivePermissions.canEditTasks) {
+      setDraggedTask(null);
+      setDropTarget(null);
+      return;
+    }
+
+    const taskToMove = draggedTask;
+    setDraggedTask(null);
+    setDropTarget(null);
+
+    const colTasks = tasks
+      .filter((t) => t.columnId === targetColumnId && t.id !== taskToMove.id)
+      .sort((a, b) => a.position - b.position);
+
+    let adjustedIndex = insertIndex;
+    if (taskToMove.columnId === targetColumnId) {
+      const origColTasks = tasks
+        .filter((t) => t.columnId === targetColumnId)
+        .sort((a, b) => a.position - b.position);
+      const origIdx = origColTasks.findIndex((t) => t.id === taskToMove.id);
+      if (origIdx !== -1 && origIdx < insertIndex) {
+        adjustedIndex = Math.max(0, insertIndex - 1);
+      }
+    }
+
+    const nextPosition = computeInsertPosition(colTasks, adjustedIndex);
+    await moveTask(activeBoardId, taskToMove.id, targetColumnId, nextPosition);
+  };
+
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-6">
+        <div className="text-sm text-slate-500 dark:text-slate-400">Loading workspace...</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <SignInView theme={theme} onToggleTheme={handleToggleTheme} />;
+  }
+
+  if (!workspaceReady) {
+    return (
+      <div className="h-screen bg-slate-50 dark:bg-slate-950 flex overflow-hidden">
+        <div className="hidden lg:block w-64 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 p-5 space-y-4">
+          <div className="h-6 w-24 bg-slate-200 dark:bg-slate-800 rounded" />
+          <div className="space-y-2 pt-4">
+            <div className="h-8 bg-slate-100 dark:bg-slate-800/70 rounded-lg" />
+            <div className="h-8 bg-slate-100 dark:bg-slate-800/70 rounded-lg" />
+          </div>
+        </div>
+        <div className="flex-1 flex flex-col">
+          <div className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-6 flex items-center justify-between">
+            <div className="h-5 w-48 bg-slate-200 dark:bg-slate-800 rounded" />
+            <div className="h-8 w-24 bg-slate-200 dark:bg-slate-800 rounded-lg" />
+          </div>
+          <div className="flex-1 p-6 flex gap-4 overflow-hidden">
+            {[1, 2, 3].map((idx) => (
+              <div
+                key={idx}
+                className="w-[320px] shrink-0 bg-slate-100/80 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-3"
+              >
+                <div className="h-5 w-28 bg-slate-200 dark:bg-slate-800 rounded" />
+                <div className="h-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg" />
+                <div className="h-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const isArchived = activeBoard?.status === 'archived';
+
+  return (
+    <div className="h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex overflow-hidden">
+      <Sidebar
+        uid={user.uid}
+        boards={boards}
+        activeBoardId={activeBoardId}
+        profile={profile}
+        userEmail={user.email}
+        isAdmin={isAdmin}
+        isBootstrapAdmin={isBootstrapAdmin}
+        mobileOpen={mobileSidebarOpen}
+        onCloseMobile={() => setMobileSidebarOpen(false)}
+        onSelectBoard={handleSelectBoard}
+        onOpenNewBoard={() => setBoardModalState({ mode: 'create' })}
+        onOpenJoinBoard={() => setJoinModalState({})}
+        onOpenAdminPanel={() => setAdminPanelOpen(true)}
+        onSignOut={handleSignOut}
+      />
+
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Top Workspace Header */}
+        <header className="h-14 px-4 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between gap-4 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={() => setMobileSidebarOpen(true)}
+              aria-label="Open boards navigation"
+              className="lg:hidden p-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 rounded-md"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-2 text-sm min-w-0">
+              <span className="text-slate-400 dark:text-slate-500 hidden sm:inline whitespace-nowrap">
+                Boards
+              </span>
+              <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">/</span>
+              <h1 className="font-display font-semibold text-slate-900 dark:text-slate-100 truncate">
+                {activeBoard ? activeBoard.title : 'Workspace'}
+              </h1>
+              {isArchived && (
+                <span className="text-xs font-medium text-amber-700 dark:text-amber-300 whitespace-nowrap">
+                  · Archived
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {activeBoard && (
+              <button
+                type="button"
+                onClick={() => setShareModalOpen(true)}
+                aria-label="Share and permissions"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 tabular-nums"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Share</span>
+                {members.length > 0 && <span>· {members.length + 1}</span>}
+              </button>
+            )}
+
+            {activeBoard && (isAdmin || activeBoard.ownerId === user.uid) && (
+              <button
+                type="button"
+                onClick={() => setBoardModalState({ mode: 'edit', board: activeBoard })}
+                aria-label="Board settings"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
+              >
+                <Settings className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Board</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleToggleTheme}
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              className="p-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors shrink-0"
+            >
+              {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
+
+            {activeBoard && effectivePermissions.canCreateTasks && columns.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setCreateTaskOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>New task</span>
+              </button>
+            )}
+          </div>
+        </header>
+
+        {/* Workspace Filter & Telemetry Bar */}
+        {activeBoard && (
+          <div className="px-4 sm:px-6 py-3 border-b border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900/40 flex flex-wrap items-center justify-between gap-3 shrink-0">
+            <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
+              <div className="relative w-full sm:w-64">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search tasks or tags..."
+                  aria-label="Search tasks or tags"
+                  className="w-full pl-8 pr-8 py-1.5 text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    aria-label="Clear search"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <div
+                role="group"
+                aria-label="Filter by priority"
+                className="flex items-center gap-0.5 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto"
+              >
+                {(['all', 'urgent', 'high', 'medium', 'low'] as const).map((level) => {
+                  const active = priorityFilter === level;
+                  return (
+                    <button
+                      key={level}
+                      type="button"
+                      onClick={() => setPriorityFilter(level)}
+                      className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors capitalize whitespace-nowrap shrink-0 ${
+                        active
+                          ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                      }`}
+                    >
+                      {level}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setHideCompleted(!hideCompleted)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                  hideCompleted
+                    ? 'bg-blue-50 dark:bg-blue-950/50 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300'
+                    : 'bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                }`}
+              >
+                {hideCompleted ? 'Completed hidden' : 'Hide completed'}
+              </button>
+            </div>
+
+            <div className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap shrink-0">
+              {effectivePermissions.roleLabel} · {tasks.length}{' '}
+              {tasks.length === 1 ? 'task' : 'tasks'} · {completedCount} completed ·{' '}
+              {columns.length} {columns.length === 1 ? 'column' : 'columns'}
+            </div>
+          </div>
+        )}
+
+        {/* Main Kanban Board Canvas */}
+        <main className="flex-1 overflow-x-auto overflow-y-hidden p-4 sm:p-6">
+          {!activeBoard ? (
+            <div className="h-full flex items-center justify-center">
+              <div className="max-w-sm text-center space-y-3">
+                <h2 className="font-display text-lg font-semibold text-slate-900 dark:text-slate-100">
+                  No board selected
+                </h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Create a new Kanban board or join a teammate&apos;s shared board with an invite code.
+                </p>
+                <div className="flex items-center justify-center gap-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setBoardModalState({ mode: 'create' })}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Create Board</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setJoinModalState({})}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    <span>Join Board</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="h-full flex items-start gap-4 min-w-max">
+              {columns.map((col) => {
+                const colTasks = filteredTasks
+                  .filter((t) => t.columnId === col.id)
+                  .sort((a, b) => a.position - b.position);
+
+                return (
+                  <KanbanColumn
+                    key={col.id}
+                    column={col}
+                    tasks={colTasks}
+                    canCreateTasks={effectivePermissions.canCreateTasks}
+                    canEditTasks={effectivePermissions.canEditTasks}
+                    canManageColumns={effectivePermissions.canManageColumns}
+                    assigneeNames={assigneeNameMap}
+                    draggedTaskId={draggedTask?.id ?? null}
+                    dropTarget={dropTarget}
+                    onDragStartTask={handleDragStartTask}
+                    onDragEndTask={handleDragEndTask}
+                    onDragOverColumn={handleDragOverColumn}
+                    onDropOnColumn={handleDropOnColumn}
+                    onSelectTask={(task) => setSelectedTaskId(task.id)}
+                    onToggleTaskComplete={(task) =>
+                      toggleTaskCompleted(activeBoard.id, task.id, !task.completed)
+                    }
+                    onQuickCreateTask={handleQuickCreateTask}
+                    onOpenColumnSettings={(column) => setEditingColumnId(column.id)}
+                  />
+                );
+              })}
+
+              {effectivePermissions.canManageColumns && (
+                <div className="w-[280px] shrink-0">
+                  {addingColumn ? (
+                    <form
+                      onSubmit={handleCreateColumn}
+                      className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 space-y-2.5"
+                    >
+                      <input
+                        type="text"
+                        autoFocus
+                        maxLength={LIMITS.COLUMN_TITLE_MAX}
+                        value={newColumnTitle}
+                        onChange={(e) => setNewColumnTitle(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') {
+                            setAddingColumn(false);
+                            setNewColumnTitle('');
+                          }
+                        }}
+                        placeholder="Column name..."
+                        className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="submit"
+                          disabled={savingColumn || !newColumnTitle.trim()}
+                          className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-md whitespace-nowrap"
+                        >
+                          {savingColumn ? 'Adding...' : 'Add column'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAddingColumn(false);
+                            setNewColumnTitle('');
+                          }}
+                          className="px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 whitespace-nowrap"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setAddingColumn(true)}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-3 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 bg-slate-100/60 dark:bg-slate-900/30 hover:bg-slate-100 dark:hover:bg-slate-900/60 border border-dashed border-slate-300 dark:border-slate-800 rounded-xl transition-colors whitespace-nowrap"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Add column</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </main>
+      </div>
+
+      {/* Modals */}
+      {boardModalState && (
+        <BoardModal
+          uid={user.uid}
+          mode={boardModalState.mode}
+          board={boardModalState.board}
+          isAdmin={isAdmin}
+          onCreated={handleSelectBoard}
+          onDeleted={(deletedId) => {
+            if (activeBoardId === deletedId) {
+              const remaining = boards.filter((b) => b.id !== deletedId);
+              setActiveBoardId(remaining[0]?.id ?? null);
+            }
+          }}
+          onClose={() => setBoardModalState(null)}
+        />
+      )}
+
+      {shareModalOpen && activeBoard && (
+        <ShareBoardModal
+          uid={user.uid}
+          board={activeBoard}
+          members={members}
+          canManageSharing={effectivePermissions.canManageSharing}
+          onClose={() => setShareModalOpen(false)}
+        />
+      )}
+
+      {joinModalState && (
+        <JoinBoardModal
+          user={user}
+          initialBoardId={joinModalState.boardId}
+          initialInviteId={joinModalState.inviteId}
+          onJoined={handleSelectBoard}
+          onClose={() => setJoinModalState(null)}
+        />
+      )}
+
+      {adminPanelOpen && isAdmin && (
+        <AdminPanelModal
+          uid={user.uid}
+          isBootstrapAdmin={isBootstrapAdmin}
+          totalBoardsCount={boards.length}
+          onClose={() => setAdminPanelOpen(false)}
+        />
+      )}
+
+      {createTaskOpen && activeBoard && (
+        <CreateTaskModal
+          uid={user.uid}
+          board={activeBoard}
+          columns={columns}
+          tasks={tasks}
+          assigneeOptions={assigneeOptions}
+          onClose={() => setCreateTaskOpen(false)}
+        />
+      )}
+
+      {selectedTask && activeBoard && (
+        <TaskDetailModal
+          uid={user.uid}
+          board={activeBoard}
+          task={selectedTask}
+          columns={columns}
+          allTasks={tasks}
+          assigneeOptions={assigneeOptions}
+          canCreateTasks={effectivePermissions.canCreateTasks}
+          canEditTasks={effectivePermissions.canEditTasks}
+          canDeleteTasks={effectivePermissions.canDeleteTasks}
+          onClose={() => setSelectedTaskId(null)}
+        />
+      )}
+
+      {editingColumn && activeBoard && (
+        <ColumnSettingsModal
+          boardId={activeBoard.id}
+          column={editingColumn}
+          columns={columns}
+          allTasks={tasks}
+          onClose={() => setEditingColumnId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <WorkspaceApp />
+    </ErrorBoundary>
+  );
+}

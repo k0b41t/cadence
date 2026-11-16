@@ -1,0 +1,695 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: default deny everything
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 3: Global Hardened Helpers
+    // -------------------------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrapAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'btuttle@orangeusd.org';
+    }
+
+    function isAdmin() {
+      return isBootstrapAdmin()
+        || (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidOptionalId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]*$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function boardExists(boardId) {
+      return exists(/databases/$(database)/documents/boards/$(boardId));
+    }
+
+    function getBoard(boardId) {
+      return get(/databases/$(database)/documents/boards/$(boardId));
+    }
+
+    function isBoardOwner(boardId) {
+      return boardExists(boardId) && getBoard(boardId).data.ownerId == request.auth.uid;
+    }
+
+    function isBoardActive(boardId) {
+      return boardExists(boardId) && getBoard(boardId).data.status == 'active';
+    }
+
+    function memberExists(boardId, uid) {
+      return exists(/databases/$(database)/documents/boards/$(boardId)/members/$(uid));
+    }
+
+    function getMember(boardId, uid) {
+      return get(/databases/$(database)/documents/boards/$(boardId)/members/$(uid));
+    }
+
+    function isBoardMember(boardId) {
+      return isSignedIn() && memberExists(boardId, request.auth.uid) && getMember(boardId, request.auth.uid).data.canView == true;
+    }
+
+    function canAccessBoard(boardId) {
+      return isAdmin() || isBoardOwner(boardId) || isBoardMember(boardId);
+    }
+
+    function canCreateTasksOnBoard(boardId) {
+      return isAdmin()
+        || isBoardOwner(boardId)
+        || (memberExists(boardId, request.auth.uid) && getMember(boardId, request.auth.uid).data.canCreateTasks == true);
+    }
+
+    function canEditTasksOnBoard(boardId) {
+      return isAdmin()
+        || isBoardOwner(boardId)
+        || (memberExists(boardId, request.auth.uid) && getMember(boardId, request.auth.uid).data.canEditTasks == true);
+    }
+
+    function canDeleteTasksOnBoard(boardId) {
+      return isAdmin()
+        || isBoardOwner(boardId)
+        || (memberExists(boardId, request.auth.uid) && getMember(boardId, request.auth.uid).data.canDeleteTasks == true);
+    }
+
+    function canManageColumnsOnBoard(boardId) {
+      return isAdmin()
+        || isBoardOwner(boardId)
+        || (memberExists(boardId, request.auth.uid) && getMember(boardId, request.auth.uid).data.canManageColumns == true);
+    }
+
+    function inviteMatchesMember(boardId, inviteId, data) {
+      return isValidId(inviteId)
+        && exists(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId))
+        && get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.active == true
+        && data.role == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.role
+        && data.canCreateTasks == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canCreateTasks
+        && data.canEditTasks == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canEditTasks
+        && data.canDeleteTasks == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canDeleteTasks
+        && data.canManageColumns == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canManageColumns;
+    }
+
+    // -------------------------------------------------------------------------
+    // Entity Validation Blueprints
+    // -------------------------------------------------------------------------
+    function isValidAdminRecord(data, adminUid) {
+      return data.uid is string && data.uid == adminUid && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.addedBy is string && isValidId(data.addedBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidEmailLookup(data, emailHash) {
+      return data.emailHash is string && data.emailHash == emailHash
+        && data.emailHash.size() == 64 && data.emailHash.matches('^[a-f0-9]{64}$')
+        && data.uid is string && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.uid is string && data.uid == userId && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.theme in ['light', 'dark']
+        && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 500))
+        && (!('activeBoardId' in data) || isValidOptionalId(data.activeBoardId))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateInfo(data, userId) {
+      return data.uid is string && data.uid == userId && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBoardRef(data, userId, boardId) {
+      return data.boardId is string && data.boardId == boardId && isValidId(data.boardId)
+        && data.userId is string && data.userId == userId && isValidId(data.userId)
+        && data.boardTitle is string && data.boardTitle.size() >= 1 && data.boardTitle.size() <= 80
+        && data.boardOwnerId is string && isValidId(data.boardOwnerId)
+        && data.role in ['viewer', 'contributor', 'editor', 'manager']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBoard(data, boardId) {
+      return data.id is string && data.id == boardId && isValidId(data.id)
+        && data.ownerId is string && isValidId(data.ownerId)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 80
+        && data.description is string && data.description.size() <= 300
+        && data.status in ['active', 'archived']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBoardMember(data, boardId, memberId) {
+      return data.uid is string && data.uid == memberId && isValidId(data.uid)
+        && data.boardId is string && data.boardId == boardId && isValidId(data.boardId)
+        && data.ownerId is string && isValidId(data.ownerId)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.role in ['viewer', 'contributor', 'editor', 'manager']
+        && data.canView is bool
+        && data.canCreateTasks is bool
+        && data.canEditTasks is bool
+        && data.canDeleteTasks is bool
+        && data.canManageColumns is bool
+        && (!('inviteId' in data) || isValidOptionalId(data.inviteId))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBoardInvite(data, boardId, inviteId) {
+      return data.id is string && data.id == inviteId && isValidId(data.id)
+        && data.boardId is string && data.boardId == boardId && isValidId(data.boardId)
+        && data.ownerId is string && isValidId(data.ownerId)
+        && data.createdBy is string && isValidId(data.createdBy)
+        && data.label is string && data.label.size() <= 60
+        && data.role in ['viewer', 'contributor', 'editor', 'manager']
+        && data.canCreateTasks is bool
+        && data.canEditTasks is bool
+        && data.canDeleteTasks is bool
+        && data.canManageColumns is bool
+        && data.active is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidColumn(data, boardId, columnId) {
+      return data.id is string && data.id == columnId && isValidId(data.id)
+        && data.boardId is string && data.boardId == boardId && isValidId(data.boardId)
+        && data.ownerId is string && isValidId(data.ownerId)
+        && (!('createdBy' in data) || isValidId(data.createdBy))
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 50
+        && data.position is number && data.position >= 0 && data.position <= 1000000
+        && data.wipLimit is number && data.wipLimit >= 0 && data.wipLimit <= 100
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTags(tags) {
+      return tags is list
+        && tags.size() <= 5
+        && (tags.size() == 0 || (tags[0] is string && tags[0].size() >= 1 && tags[0].size() <= 24));
+    }
+
+    function isValidTask(data, boardId, taskId) {
+      return data.id is string && data.id == taskId && isValidId(data.id)
+        && data.boardId is string && data.boardId == boardId && isValidId(data.boardId)
+        && data.columnId is string && isValidId(data.columnId)
+        && data.ownerId is string && isValidId(data.ownerId)
+        && (!('createdBy' in data) || isValidId(data.createdBy))
+        && (!('assigneeId' in data) || isValidOptionalId(data.assigneeId))
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 140
+        && data.description is string && data.description.size() <= 2000
+        && data.priority in ['low', 'medium', 'high', 'urgent']
+        && data.position is number && data.position >= 0 && data.position <= 1000000
+        && isValidTags(data.tags)
+        && data.dueDate is string && data.dueDate.size() <= 32
+        && data.completed is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSubtask(data, boardId, taskId, subtaskId) {
+      return data.id is string && data.id == subtaskId && isValidId(data.id)
+        && data.boardId is string && data.boardId == boardId && isValidId(data.boardId)
+        && data.taskId is string && data.taskId == taskId && isValidId(data.taskId)
+        && data.ownerId is string && isValidId(data.ownerId)
+        && (!('createdBy' in data) || isValidId(data.createdBy))
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 140
+        && data.completed is bool
+        && data.position is number && data.position >= 0 && data.position <= 1000000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Global Admins Registry
+    // -------------------------------------------------------------------------
+    match /admins/{adminUid} {
+      allow get: if isSignedIn() && isValidId(adminUid) && (isOwner(adminUid) || isAdmin());
+      allow list: if isSignedIn() && isBootstrapAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(adminUid)
+        && incoming().keys().hasAll(['uid', 'displayName', 'addedBy', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['uid', 'displayName', 'addedBy', 'createdAt', 'updatedAt'])
+        && isValidAdminRecord(incoming(), adminUid)
+        && incoming().addedBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(adminUid) && adminUid != request.auth.uid;
+    }
+
+    // -------------------------------------------------------------------------
+    // Hashed Email Lookup (Zero Plaintext PII, No List)
+    // -------------------------------------------------------------------------
+    match /emailLookup/{emailHash} {
+      allow get: if isSignedIn() && emailHash.size() == 64 && emailHash.matches('^[a-f0-9]{64}$');
+      allow list: if false;
+
+      allow create: if isVerifiedUser()
+        && emailHash.size() == 64 && emailHash.matches('^[a-f0-9]{64}$')
+        && incoming().keys().hasAll(['emailHash', 'uid', 'displayName', 'updatedAt'])
+        && incoming().keys().hasOnly(['emailHash', 'uid', 'displayName', 'updatedAt'])
+        && isValidEmailLookup(incoming(), emailHash)
+        && incoming().uid == request.auth.uid
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && emailHash.size() == 64 && emailHash.matches('^[a-f0-9]{64}$')
+        && existing().uid == request.auth.uid
+        && isValidEmailLookup(incoming(), emailHash)
+        && incoming().uid == existing().uid
+        && incoming().emailHash == existing().emailHash
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt']);
+
+      allow delete: if isVerifiedUser() && existing().uid == request.auth.uid;
+    }
+
+    // -------------------------------------------------------------------------
+    // Users, Private PII Split Collection, and Shared BoardRefs
+    // -------------------------------------------------------------------------
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if false;
+
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && incoming().keys().hasAll(['uid', 'displayName', 'theme', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['uid', 'displayName', 'photoUrl', 'activeBoardId', 'theme', 'createdAt', 'updatedAt'])
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoUrl', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['activeBoardId', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['theme', 'updatedAt'])
+        );
+
+      allow delete: if isVerifiedUser() && isValidId(userId) && isOwner(userId);
+
+      match /private/{docId} {
+        allow get: if isSignedIn() && isValidId(userId) && docId == 'info' && (isOwner(userId) || isAdmin());
+        allow list: if false;
+
+        allow create: if isVerifiedUser()
+          && isValidId(userId)
+          && docId == 'info'
+          && isOwner(userId)
+          && incoming().keys().hasAll(['uid', 'email', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['uid', 'email', 'createdAt', 'updatedAt'])
+          && isValidUserPrivateInfo(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isVerifiedUser()
+          && isValidId(userId)
+          && docId == 'info'
+          && isOwner(userId)
+          && isValidUserPrivateInfo(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt']);
+
+        allow delete: if isVerifiedUser() && isValidId(userId) && docId == 'info' && isOwner(userId);
+      }
+
+      match /boardRefs/{boardId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(boardId)
+          && (isOwner(userId) || isAdmin() || isBoardOwner(boardId));
+        allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+        allow create: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(boardId)
+          && incoming().keys().hasAll(['boardId', 'userId', 'boardTitle', 'boardOwnerId', 'role', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['boardId', 'userId', 'boardTitle', 'boardOwnerId', 'role', 'createdAt', 'updatedAt'])
+          && isValidBoardRef(incoming(), userId, boardId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && boardExists(boardId)
+          && incoming().boardOwnerId == getBoard(boardId).data.ownerId
+          && (
+            isAdmin() ||
+            isBoardOwner(boardId) ||
+            (
+              isOwner(userId)
+              && existsAfter(/databases/$(database)/documents/boards/$(boardId)/members/$(userId))
+            )
+          );
+
+        allow update: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(boardId)
+          && isValidBoardRef(incoming(), userId, boardId)
+          && incoming().boardId == existing().boardId
+          && incoming().userId == existing().userId
+          && incoming().boardOwnerId == existing().boardOwnerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (isAdmin() || isBoardOwner(boardId))
+          && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'boardTitle', 'updatedAt']);
+
+        allow delete: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(boardId)
+          && (isOwner(userId) || isAdmin() || isBoardOwner(boardId));
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Boards (Master Resource)
+    // -------------------------------------------------------------------------
+    match /boards/{boardId} {
+      allow get: if isSignedIn() && isValidId(boardId) && (
+        isAdmin() ||
+        existing().ownerId == request.auth.uid ||
+        isBoardMember(boardId)
+      );
+
+      allow list: if isSignedIn() && (
+        isBootstrapAdmin() ||
+        resource.data.ownerId == request.auth.uid
+      );
+
+      allow create: if isVerifiedUser()
+        && isValidId(boardId)
+        && incoming().keys().hasAll(['id', 'ownerId', 'title', 'description', 'status', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['id', 'ownerId', 'title', 'description', 'status', 'createdAt', 'updatedAt'])
+        && isValidBoard(incoming(), boardId)
+        && incoming().ownerId == request.auth.uid
+        && incoming().status == 'active'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(boardId)
+        && isValidBoard(incoming(), boardId)
+        && incoming().id == existing().id
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().status != 'archived'
+            && (existing().ownerId == request.auth.uid || isBoardMember(boardId))
+            && (
+              (existing().ownerId == request.auth.uid && incoming().status == 'archived' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+              (existing().ownerId == request.auth.uid && incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'updatedAt']))
+            )
+          )
+        );
+
+      allow delete: if isVerifiedUser() && isValidId(boardId) && (isAdmin() || existing().ownerId == request.auth.uid);
+
+      // -----------------------------------------------------------------------
+      // Board Members Subcollection
+      // -----------------------------------------------------------------------
+      match /members/{memberId} {
+        allow get: if isSignedIn() && isValidId(boardId) && isValidId(memberId) && canAccessBoard(boardId);
+        allow list: if isSignedIn() && (
+          isBootstrapAdmin() ||
+          resource.data.ownerId == request.auth.uid ||
+          resource.data.uid == request.auth.uid ||
+          canAccessBoard(boardId)
+        );
+
+        allow create: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(memberId)
+          && incoming().keys().hasAll(['uid', 'boardId', 'ownerId', 'displayName', 'role', 'canView', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['uid', 'boardId', 'ownerId', 'displayName', 'role', 'canView', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'inviteId', 'createdAt', 'updatedAt'])
+          && isValidBoardMember(incoming(), boardId, memberId)
+          && incoming().canView == true
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && boardExists(boardId)
+          && incoming().ownerId == getBoard(boardId).data.ownerId
+          && (
+            isAdmin() ||
+            (isBoardOwner(boardId) && isBoardActive(boardId)) ||
+            (
+              isBoardActive(boardId)
+              && isOwner(memberId)
+              && 'inviteId' in incoming()
+              && inviteMatchesMember(boardId, incoming().inviteId, incoming())
+            )
+          );
+
+        allow update: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(memberId)
+          && isValidBoardMember(incoming(), boardId, memberId)
+          && incoming().uid == existing().uid
+          && incoming().boardId == existing().boardId
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (isAdmin() || (isBoardOwner(boardId) && isBoardActive(boardId)))
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'role',
+            'canView',
+            'canCreateTasks',
+            'canEditTasks',
+            'canDeleteTasks',
+            'canManageColumns',
+            'updatedAt'
+          ]);
+
+        allow delete: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(memberId)
+          && (isAdmin() || isBoardOwner(boardId) || isOwner(memberId));
+      }
+
+      // -----------------------------------------------------------------------
+      // Board Invites Subcollection
+      // -----------------------------------------------------------------------
+      match /invites/{inviteId} {
+        allow get: if isSignedIn() && isValidId(boardId) && isValidId(inviteId);
+        allow list: if isSignedIn() && (isBootstrapAdmin() || resource.data.ownerId == request.auth.uid);
+
+        allow create: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(inviteId)
+          && incoming().keys().hasAll(['id', 'boardId', 'ownerId', 'createdBy', 'label', 'role', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'active', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'boardId', 'ownerId', 'createdBy', 'label', 'role', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'active', 'createdAt', 'updatedAt'])
+          && isValidBoardInvite(incoming(), boardId, inviteId)
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && boardExists(boardId)
+          && incoming().ownerId == getBoard(boardId).data.ownerId
+          && (isAdmin() || (isBoardOwner(boardId) && isBoardActive(boardId)));
+
+        allow update: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(inviteId)
+          && isValidBoardInvite(incoming(), boardId, inviteId)
+          && incoming().id == existing().id
+          && incoming().boardId == existing().boardId
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (isAdmin() || (isBoardOwner(boardId) && isBoardActive(boardId)))
+          && incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt']);
+
+        allow delete: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(inviteId)
+          && (isAdmin() || isBoardOwner(boardId));
+      }
+
+      // -----------------------------------------------------------------------
+      // Columns Subcollection
+      // -----------------------------------------------------------------------
+      match /columns/{columnId} {
+        allow get: if isSignedIn() && isValidId(boardId) && isValidId(columnId) && canAccessBoard(boardId);
+        allow list: if isSignedIn() && (
+          isBootstrapAdmin() ||
+          resource.data.ownerId == request.auth.uid ||
+          canAccessBoard(boardId)
+        );
+
+        allow create: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(columnId)
+          && incoming().keys().hasAll(['id', 'boardId', 'ownerId', 'createdBy', 'title', 'position', 'wipLimit', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'boardId', 'ownerId', 'createdBy', 'title', 'position', 'wipLimit', 'createdAt', 'updatedAt'])
+          && isValidColumn(incoming(), boardId, columnId)
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && boardExists(boardId)
+          && incoming().ownerId == getBoard(boardId).data.ownerId
+          && (isAdmin() || (isBoardActive(boardId) && canManageColumnsOnBoard(boardId)));
+
+        allow update: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(columnId)
+          && isValidColumn(incoming(), boardId, columnId)
+          && incoming().id == existing().id
+          && incoming().boardId == existing().boardId
+          && incoming().ownerId == existing().ownerId
+          && (!('createdBy' in existing()) || incoming().createdBy == existing().createdBy)
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (isAdmin() || (isBoardActive(boardId) && canManageColumnsOnBoard(boardId)))
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'wipLimit', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['position', 'updatedAt'])
+          );
+
+        allow delete: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(columnId)
+          && (isAdmin() || (isBoardActive(boardId) && canManageColumnsOnBoard(boardId)));
+      }
+
+      // -----------------------------------------------------------------------
+      // Tasks Subcollection
+      // -----------------------------------------------------------------------
+      match /tasks/{taskId} {
+        allow get: if isSignedIn() && isValidId(boardId) && isValidId(taskId) && canAccessBoard(boardId);
+        allow list: if isSignedIn() && (
+          isBootstrapAdmin() ||
+          resource.data.ownerId == request.auth.uid ||
+          canAccessBoard(boardId)
+        );
+
+        allow create: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(taskId)
+          && incoming().keys().hasAll(['id', 'boardId', 'columnId', 'ownerId', 'createdBy', 'assigneeId', 'title', 'description', 'priority', 'position', 'tags', 'dueDate', 'completed', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'boardId', 'columnId', 'ownerId', 'createdBy', 'assigneeId', 'title', 'description', 'priority', 'position', 'tags', 'dueDate', 'completed', 'createdAt', 'updatedAt'])
+          && isValidTask(incoming(), boardId, taskId)
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && boardExists(boardId)
+          && incoming().ownerId == getBoard(boardId).data.ownerId
+          && exists(/databases/$(database)/documents/boards/$(boardId)/columns/$(incoming().columnId))
+          && (isAdmin() || (isBoardActive(boardId) && canCreateTasksOnBoard(boardId)));
+
+        allow update: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(taskId)
+          && isValidTask(incoming(), boardId, taskId)
+          && incoming().id == existing().id
+          && incoming().boardId == existing().boardId
+          && incoming().ownerId == existing().ownerId
+          && (!('createdBy' in existing()) || incoming().createdBy == existing().createdBy)
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/boards/$(boardId)/columns/$(incoming().columnId))
+          && (isAdmin() || (isBoardActive(boardId) && canEditTasksOnBoard(boardId)))
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['columnId', 'position', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'assigneeId', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'updatedAt'])
+          );
+
+        allow delete: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(taskId)
+          && (isAdmin() || (isBoardActive(boardId) && canDeleteTasksOnBoard(boardId)));
+
+        // ---------------------------------------------------------------------
+        // Subtasks Subcollection
+        // ---------------------------------------------------------------------
+        match /subtasks/{subtaskId} {
+          allow get: if isSignedIn() && isValidId(boardId) && isValidId(taskId) && isValidId(subtaskId) && canAccessBoard(boardId);
+          allow list: if isSignedIn() && (
+            isBootstrapAdmin() ||
+            resource.data.ownerId == request.auth.uid ||
+            canAccessBoard(boardId)
+          );
+
+          allow create: if isVerifiedUser()
+            && isValidId(boardId)
+            && isValidId(taskId)
+            && isValidId(subtaskId)
+            && incoming().keys().hasAll(['id', 'boardId', 'taskId', 'ownerId', 'createdBy', 'title', 'completed', 'position', 'createdAt', 'updatedAt'])
+            && incoming().keys().hasOnly(['id', 'boardId', 'taskId', 'ownerId', 'createdBy', 'title', 'completed', 'position', 'createdAt', 'updatedAt'])
+            && isValidSubtask(incoming(), boardId, taskId, subtaskId)
+            && incoming().createdBy == request.auth.uid
+            && incoming().createdAt == request.time
+            && incoming().updatedAt == request.time
+            && boardExists(boardId)
+            && incoming().ownerId == getBoard(boardId).data.ownerId
+            && exists(/databases/$(database)/documents/boards/$(boardId)/tasks/$(taskId))
+            && (isAdmin() || (isBoardActive(boardId) && canCreateTasksOnBoard(boardId)));
+
+          allow update: if isVerifiedUser()
+            && isValidId(boardId)
+            && isValidId(taskId)
+            && isValidId(subtaskId)
+            && isValidSubtask(incoming(), boardId, taskId, subtaskId)
+            && incoming().id == existing().id
+            && incoming().boardId == existing().boardId
+            && incoming().taskId == existing().taskId
+            && incoming().ownerId == existing().ownerId
+            && (!('createdBy' in existing()) || incoming().createdBy == existing().createdBy)
+            && incoming().createdAt == existing().createdAt
+            && incoming().updatedAt == request.time
+            && (isAdmin() || (isBoardActive(boardId) && canEditTasksOnBoard(boardId)))
+            && (
+              incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'updatedAt']) ||
+              incoming().diff(existing()).affectedKeys().hasOnly(['title', 'updatedAt']) ||
+              incoming().diff(existing()).affectedKeys().hasOnly(['position', 'updatedAt'])
+            );
+
+          allow delete: if isVerifiedUser()
+            && isValidId(boardId)
+            && isValidId(taskId)
+            && isValidId(subtaskId)
+            && (isAdmin() || (isBoardActive(boardId) && canDeleteTasksOnBoard(boardId)));
+        }
+      }
+    }
+  }
+}

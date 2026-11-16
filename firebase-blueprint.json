@@ -1,0 +1,709 @@
+{
+  "entities": {
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Global administrator grant document keyed by Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the global admin.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display label of the admin.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "addedBy": {
+          "type": "string",
+          "description": "UID of the admin who granted this role.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["uid", "displayName", "addedBy", "createdAt", "updatedAt"]
+    },
+    "EmailLookup": {
+      "title": "EmailLookup",
+      "description": "One-way SHA-256 hash mapping a normalized email address to a user UID without exposing plaintext PII.",
+      "type": "object",
+      "properties": {
+        "emailHash": {
+          "type": "string",
+          "description": "64-character lowercase SHA-256 hex digest of lowercase email.",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Public display name for UI confirmation.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["emailHash", "uid", "displayName", "updatedAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public-safe user workspace profile and UI preferences (no PII).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "photoUrl": {
+          "type": "string",
+          "description": "Optional avatar URL.",
+          "maxLength": 500
+        },
+        "activeBoardId": {
+          "type": "string",
+          "description": "Last selected Kanban board ID.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]*$"
+        },
+        "theme": {
+          "type": "string",
+          "description": "Preferred UI color theme.",
+          "enum": ["light", "dark"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["uid", "displayName", "theme", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII record containing the user's email address.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "description": "Verified user email address.",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["uid", "email", "createdAt", "updatedAt"]
+    },
+    "BoardRef": {
+      "title": "BoardRef",
+      "description": "User-scoped pointer to a shared Kanban board for efficient list queries.",
+      "type": "object",
+      "properties": {
+        "boardId": {
+          "type": "string",
+          "description": "Shared Kanban board ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Collaborator UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "boardTitle": {
+          "type": "string",
+          "description": "Cached board title for sidebar listing.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "boardOwnerId": {
+          "type": "string",
+          "description": "UID of the board creator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "role": {
+          "type": "string",
+          "description": "Assigned role label.",
+          "enum": ["viewer", "contributor", "editor", "manager"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["boardId", "userId", "boardTitle", "boardOwnerId", "role", "createdAt", "updatedAt"]
+    },
+    "Board": {
+      "title": "Board",
+      "description": "A Kanban board owned by a creator and shareable with collaborators.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Board document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the board creator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "description": "Display title of the Kanban board.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "description": {
+          "type": "string",
+          "description": "Short summary of the board purpose.",
+          "maxLength": 300
+        },
+        "status": {
+          "type": "string",
+          "description": "Lifecycle status of the board.",
+          "enum": ["active", "archived"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["id", "ownerId", "title", "description", "status", "createdAt", "updatedAt"]
+    },
+    "BoardMember": {
+      "title": "BoardMember",
+      "description": "Collaborator membership and granular utility permissions on a Kanban board.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Collaborator UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "boardId": {
+          "type": "string",
+          "description": "Parent board ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the parent board creator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Collaborator display name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "role": {
+          "type": "string",
+          "description": "Preset role name.",
+          "enum": ["viewer", "contributor", "editor", "manager"]
+        },
+        "canView": {
+          "type": "boolean",
+          "description": "Allows viewing the board, columns, and tasks."
+        },
+        "canCreateTasks": {
+          "type": "boolean",
+          "description": "Allows creating tasks and subtasks."
+        },
+        "canEditTasks": {
+          "type": "boolean",
+          "description": "Allows editing, completing, and moving tasks across columns."
+        },
+        "canDeleteTasks": {
+          "type": "boolean",
+          "description": "Allows deleting tasks and subtasks."
+        },
+        "canManageColumns": {
+          "type": "boolean",
+          "description": "Allows creating, renaming, reordering, and deleting columns and WIP limits."
+        },
+        "inviteId": {
+          "type": "string",
+          "description": "Optional invite code ID used to join.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]*$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": [
+        "uid",
+        "boardId",
+        "ownerId",
+        "displayName",
+        "role",
+        "canView",
+        "canCreateTasks",
+        "canEditTasks",
+        "canDeleteTasks",
+        "canManageColumns",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "BoardInvite": {
+      "title": "BoardInvite",
+      "description": "Shareable invite pass granting predefined permissions on a Kanban board.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Invite document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "boardId": {
+          "type": "string",
+          "description": "Parent board ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the parent board creator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "UID of the creator/admin who generated the invite.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "label": {
+          "type": "string",
+          "description": "Optional label describing who this invite is for.",
+          "maxLength": 60
+        },
+        "role": {
+          "type": "string",
+          "description": "Preset role name.",
+          "enum": ["viewer", "contributor", "editor", "manager"]
+        },
+        "canCreateTasks": {
+          "type": "boolean",
+          "description": "Grants task and subtask creation."
+        },
+        "canEditTasks": {
+          "type": "boolean",
+          "description": "Grants task editing and moving."
+        },
+        "canDeleteTasks": {
+          "type": "boolean",
+          "description": "Grants task and subtask deletion."
+        },
+        "canManageColumns": {
+          "type": "boolean",
+          "description": "Grants column and WIP limit management."
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether the invite can still be redeemed."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "boardId",
+        "ownerId",
+        "createdBy",
+        "label",
+        "role",
+        "canCreateTasks",
+        "canEditTasks",
+        "canDeleteTasks",
+        "canManageColumns",
+        "active",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Column": {
+      "title": "Column",
+      "description": "A workflow stage column within a Kanban board.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Column document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "boardId": {
+          "type": "string",
+          "description": "Parent board ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the parent board creator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "UID of the user who created this column.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "description": "Column heading name.",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "position": {
+          "type": "number",
+          "description": "Sort order index of the column."
+        },
+        "wipLimit": {
+          "type": "number",
+          "description": "Optional work-in-progress card limit (0 means unlimited)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["id", "boardId", "ownerId", "title", "position", "wipLimit", "createdAt", "updatedAt"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "A Kanban card belonging to a board and column.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Task document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "boardId": {
+          "type": "string",
+          "description": "Parent board ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "columnId": {
+          "type": "string",
+          "description": "Current column ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the parent board creator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "UID of the user who created the task.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "assigneeId": {
+          "type": "string",
+          "description": "Optional UID of the assigned board member.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]*$"
+        },
+        "title": {
+          "type": "string",
+          "description": "Task card headline.",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "description": {
+          "type": "string",
+          "description": "Detailed task notes.",
+          "maxLength": 2000
+        },
+        "priority": {
+          "type": "string",
+          "description": "Task priority level.",
+          "enum": ["low", "medium", "high", "urgent"]
+        },
+        "position": {
+          "type": "number",
+          "description": "Sort position within the column."
+        },
+        "tags": {
+          "type": "array",
+          "description": "Up to 5 short label strings."
+        },
+        "dueDate": {
+          "type": "string",
+          "description": "Optional YYYY-MM-DD due date string or empty string.",
+          "maxLength": 32
+        },
+        "completed": {
+          "type": "boolean",
+          "description": "Whether the task is marked complete."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "boardId",
+        "columnId",
+        "ownerId",
+        "title",
+        "description",
+        "priority",
+        "position",
+        "tags",
+        "dueDate",
+        "completed",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Subtask": {
+      "title": "Subtask",
+      "description": "A checklist item inside a Kanban task.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Subtask document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "boardId": {
+          "type": "string",
+          "description": "Parent board ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "taskId": {
+          "type": "string",
+          "description": "Parent task ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the parent board creator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "UID of the user who created the subtask.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "description": "Checklist item text.",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "completed": {
+          "type": "boolean",
+          "description": "Checklist completion state."
+        },
+        "position": {
+          "type": "number",
+          "description": "Sort position within the task."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["id", "boardId", "taskId", "ownerId", "title", "completed", "position", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Global admin role registry."
+    },
+    "/emailLookup/{emailHash}": {
+      "schema": { "$ref": "#/entities/EmailLookup" },
+      "description": "Hashed email lookup index for board sharing without storing plaintext emails."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Public-safe user profile and preferences."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Private PII document (email) isolated to the owning user or admin."
+    },
+    "/users/{userId}/boardRefs/{boardId}": {
+      "schema": { "$ref": "#/entities/BoardRef" },
+      "description": "User-scoped pointers to boards shared with this user."
+    },
+    "/boards/{boardId}": {
+      "schema": { "$ref": "#/entities/Board" },
+      "description": "Top-level Kanban boards."
+    },
+    "/boards/{boardId}/members/{memberId}": {
+      "schema": { "$ref": "#/entities/BoardMember" },
+      "description": "Board collaborators and their granular utility permissions."
+    },
+    "/boards/{boardId}/invites/{inviteId}": {
+      "schema": { "$ref": "#/entities/BoardInvite" },
+      "description": "Shareable invite passes with fixed permissions."
+    },
+    "/boards/{boardId}/columns/{columnId}": {
+      "schema": { "$ref": "#/entities/Column" },
+      "description": "Columns belonging to a Kanban board."
+    },
+    "/boards/{boardId}/tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/Task" },
+      "description": "Task cards belonging to a Kanban board and column."
+    },
+    "/boards/{boardId}/tasks/{taskId}/subtasks/{subtaskId}": {
+      "schema": { "$ref": "#/entities/Subtask" },
+      "description": "Checklist subtasks belonging to a Kanban task."
+    }
+  }
+}
