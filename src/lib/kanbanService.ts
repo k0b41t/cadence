@@ -32,9 +32,124 @@ import {
   type Priority,
   type Subtask,
   type Task,
+  type TaskLink,
+  type TaskLinkKind,
+  type TaskMessage,
+  type TaskMilestone,
   type ThemeMode,
   type UserProfile,
 } from '../types/kanban';
+
+export function getTodayDateKey(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export function addDaysToDateKey(dateKey: string, deltaDays: number): string {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const dt = new Date(y, (m || 1) - 1, (d || 1) + deltaDays);
+  const ny = dt.getFullYear();
+  const nm = String(dt.getMonth() + 1).padStart(2, '0');
+  const nd = String(dt.getDate()).padStart(2, '0');
+  return `${ny}-${nm}-${nd}`;
+}
+
+export function normalizeTaskUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) throw new Error('Link URL cannot be empty.');
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(withScheme);
+  } catch {
+    throw new Error('Please enter a valid http:// or https:// URL.');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Only http:// and https:// URLs are allowed.');
+  }
+  const normalized = parsed.toString();
+  if (normalized.length > LIMITS.TASK_LINK_URL_MAX) {
+    throw new Error(`URL must be ${LIMITS.TASK_LINK_URL_MAX} characters or fewer.`);
+  }
+  return normalized;
+}
+
+export function inferLinkKind(url: string): TaskLinkKind {
+  const lower = url.toLowerCase();
+  if (
+    lower.includes('github.com') ||
+    lower.includes('gitlab.com') ||
+    lower.includes('bitbucket.org') ||
+    lower.includes('codeberg.org')
+  ) {
+    return 'repo';
+  }
+  if (
+    lower.includes('docs.google.com') ||
+    lower.includes('notion.so') ||
+    lower.includes('figma.com') ||
+    lower.includes('confluence')
+  ) {
+    return 'doc';
+  }
+  if (
+    lower.includes('drive.google.com') ||
+    lower.includes('dropbox.com') ||
+    /\.(pdf|zip|csv|json|yaml|yml|md|png|jpg)(\?|$)/i.test(lower)
+  ) {
+    return 'file';
+  }
+  return 'other';
+}
+
+function sanitizeDateKey(value: string | undefined): string {
+  const clean = (value ?? '').trim().slice(0, LIMITS.TASK_DUE_DATE_MAX);
+  return /^\d{4}-\d{2}-\d{2}$/.test(clean) ? clean : '';
+}
+
+function sanitizeTaskLinks(links: TaskLink[] | undefined): TaskLink[] {
+  if (!links || links.length === 0) return [];
+  const cleaned: TaskLink[] = [];
+  for (const item of links) {
+    if (cleaned.length >= LIMITS.TASK_LINKS_MAX) break;
+    const url = normalizeTaskUrl(item.url);
+    const fallbackLabel = (() => {
+      try {
+        return new URL(url).hostname.replace(/^www\./, '');
+      } catch {
+        return 'External Link';
+      }
+    })();
+    const label =
+      sanitizeText(item.label || fallbackLabel, LIMITS.TASK_LINK_LABEL_MAX) || fallbackLabel;
+    const kind: TaskLinkKind =
+      item.kind === 'repo' || item.kind === 'file' || item.kind === 'doc' || item.kind === 'other'
+        ? item.kind
+        : inferLinkKind(url);
+    if (!cleaned.some((existing) => existing.url === url)) {
+      cleaned.push({ label, url, kind });
+    }
+  }
+  return cleaned;
+}
+
+function sanitizeTaskMilestones(milestones: TaskMilestone[] | undefined): TaskMilestone[] {
+  if (!milestones || milestones.length === 0) return [];
+  const cleaned: TaskMilestone[] = [];
+  for (const item of milestones) {
+    if (cleaned.length >= LIMITS.TASK_MILESTONES_MAX) break;
+    const title = sanitizeText(item.title, LIMITS.TASK_MILESTONE_TITLE_MAX);
+    const date = sanitizeDateKey(item.date);
+    if (!title || !date) continue;
+    const id = item.id && ID_REGEX.test(item.id) ? item.id.slice(0, LIMITS.ID_MAX) : generateId('ms');
+    cleaned.push({ id, title, date });
+  }
+  cleaned.sort((a, b) => a.date.localeCompare(b.date));
+  return cleaned;
+}
 
 function sanitizeText(value: string, maxLength: number): string {
   return value.trim().slice(0, maxLength);
@@ -63,7 +178,7 @@ function assertValidId(id: string, label: string) {
   }
 }
 
-function generateId(prefix: string): string {
+export function generateId(prefix: string): string {
   const raw = crypto.randomUUID().replace(/-/g, '').slice(0, 20);
   return `${prefix}_${raw}`;
 }
@@ -196,6 +311,25 @@ export async function ensureUserAndStarterWorkspace(user: User): Promise<UserPro
     }
   }
 
+  // Ensure bootstrap admin also has an /admins/{uid} doc so tasks can be assigned to them securely
+  if (user.emailVerified && user.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase()) {
+    const adminPath = `admins/${user.uid}`;
+    try {
+      const adminSnap = await getDoc(doc(db, 'admins', user.uid));
+      if (!adminSnap.exists()) {
+        await setDoc(doc(db, 'admins', user.uid), {
+          uid: user.uid,
+          displayName,
+          addedBy: user.uid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, adminPath);
+    }
+  }
+
   // Provision starter board only if the user owns 0 boards and has 0 shared boards
   try {
     const [ownedSnaps, sharedSnaps] = await Promise.all([
@@ -208,7 +342,8 @@ export async function ensureUserAndStarterWorkspace(user: User): Promise<UserPro
         'Product Launch',
         'Track milestones, design reviews, and release engineering tasks.',
         'standard',
-        true
+        true,
+        displayName
       );
       await updateUserActiveBoard(user.uid, boardId);
     }
@@ -478,30 +613,110 @@ export function subscribeAdmins(onData: (admins: AdminRecord[]) => void): Unsubs
   );
 }
 
+export function subscribeBoardMessages(
+  boardId: string,
+  onData: (messages: TaskMessage[]) => void
+): Unsubscribe {
+  const path = `boards/${boardId}/messages`;
+  return onSnapshot(
+    collection(db, 'boards', boardId, 'messages'),
+    (snapshot) => {
+      const items = snapshot.docs.map((d) => d.data() as TaskMessage);
+      items.sort(
+        (a, b) =>
+          (a.createdAt?.toMillis?.() ?? Number.MAX_SAFE_INTEGER) -
+          (b.createdAt?.toMillis?.() ?? Number.MAX_SAFE_INTEGER)
+      );
+      onData(items);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    }
+  );
+}
+
+export function subscribeAllBoardsMessages(
+  boards: Board[],
+  onData: (messages: TaskMessage[]) => void
+): Unsubscribe {
+  if (boards.length === 0) {
+    onData([]);
+    return () => {};
+  }
+
+  const byBoard = new Map<string, TaskMessage[]>();
+  const emit = () => {
+    const merged: TaskMessage[] = [];
+    for (const list of byBoard.values()) {
+      merged.push(...list);
+    }
+    merged.sort(
+      (a, b) =>
+        (a.createdAt?.toMillis?.() ?? Number.MAX_SAFE_INTEGER) -
+        (b.createdAt?.toMillis?.() ?? Number.MAX_SAFE_INTEGER)
+    );
+    onData(merged);
+  };
+
+  const unsubs = boards.map((board) => {
+    const path = `boards/${board.id}/messages`;
+    return onSnapshot(
+      collection(db, 'boards', board.id, 'messages'),
+      (snapshot) => {
+        byBoard.set(
+          board.id,
+          snapshot.docs.map((d) => d.data() as TaskMessage)
+        );
+        emit();
+      },
+      (error) => {
+        if (error instanceof Error && error.message.includes('permission')) {
+          byBoard.delete(board.id);
+          emit();
+          return;
+        }
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+  });
+
+  return () => {
+    unsubs.forEach((u) => u());
+  };
+}
+
 export async function createBoard(
   uid: string,
   title: string,
   description: string,
   template: BoardTemplate = 'standard',
-  seedStarterTasks = false
+  seedStarterTasks = false,
+  ownerDisplayName?: string
 ): Promise<string> {
   assertValidId(uid, 'userId');
   const cleanTitle = sanitizeText(title, LIMITS.BOARD_TITLE_MAX);
   if (!cleanTitle) throw new Error('Board title cannot be empty.');
   const cleanDescription = sanitizeText(description, LIMITS.BOARD_DESC_MAX);
+  const cleanOwnerName = ownerDisplayName
+    ? sanitizeText(ownerDisplayName, LIMITS.USER_DISPLAY_NAME_MAX)
+    : '';
 
   const boardId = generateId('brd');
   const boardPath = `boards/${boardId}`;
+  const boardPayload: Record<string, unknown> = {
+    id: boardId,
+    ownerId: uid,
+    title: cleanTitle,
+    description: cleanDescription,
+    status: 'active',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (cleanOwnerName) {
+    boardPayload.ownerDisplayName = cleanOwnerName;
+  }
   try {
-    await setDoc(doc(db, 'boards', boardId), {
-      id: boardId,
-      ownerId: uid,
-      title: cleanTitle,
-      description: cleanDescription,
-      status: 'active',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    await setDoc(doc(db, 'boards', boardId), boardPayload);
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, boardPath);
   }
@@ -532,6 +747,7 @@ export async function createBoard(
   }
 
   if (seedStarterTasks && colIds.length >= 4) {
+    const today = getTodayDateKey();
     const starterTasks: Array<{
       columnId: string;
       title: string;
@@ -540,6 +756,10 @@ export async function createBoard(
       tags: string[];
       dueDate: string;
       completed: boolean;
+      placedOnColumnAt: string;
+      completedAt: string;
+      links: TaskLink[];
+      milestones: TaskMilestone[];
       position: number;
     }> = [
       {
@@ -548,8 +768,24 @@ export async function createBoard(
         description: 'Document local setup, security rules walkthrough, and initial permissions.',
         priority: 'medium',
         tags: ['docs', 'onboarding'],
-        dueDate: '',
+        dueDate: addDaysToDateKey(today, 6),
         completed: false,
+        placedOnColumnAt: addDaysToDateKey(today, -2),
+        completedAt: '',
+        links: [
+          {
+            label: 'Onboarding Guide',
+            url: 'https://github.com/example/cadence-handbook',
+            kind: 'repo',
+          },
+        ],
+        milestones: [
+          {
+            id: generateId('ms'),
+            title: 'Draft Review',
+            date: addDaysToDateKey(today, 2),
+          },
+        ],
         position: 1000,
       },
       {
@@ -558,8 +794,18 @@ export async function createBoard(
         description: 'Verify all workspace listeners resolve without missing index errors.',
         priority: 'high',
         tags: ['firestore', 'infra'],
-        dueDate: '2026-11-22',
+        dueDate: addDaysToDateKey(today, 4),
         completed: false,
+        placedOnColumnAt: addDaysToDateKey(today, -3),
+        completedAt: '',
+        links: [],
+        milestones: [
+          {
+            id: generateId('ms'),
+            title: 'Load Check',
+            date: addDaysToDateKey(today, 1),
+          },
+        ],
         position: 1000,
       },
       {
@@ -568,8 +814,18 @@ export async function createBoard(
         description: 'Summarize drag-and-drop workflow, WIP limits, and dark theme support.',
         priority: 'urgent',
         tags: ['release'],
-        dueDate: '2026-11-18',
+        dueDate: addDaysToDateKey(today, 2),
         completed: false,
+        placedOnColumnAt: addDaysToDateKey(today, -4),
+        completedAt: '',
+        links: [],
+        milestones: [
+          {
+            id: generateId('ms'),
+            title: 'Copy Freeze',
+            date: today,
+          },
+        ],
         position: 1000,
       },
       {
@@ -578,8 +834,18 @@ export async function createBoard(
         description: 'Verified Google OAuth flow and zero-trust Firestore ruleset deployed.',
         priority: 'low',
         tags: ['security'],
-        dueDate: '',
+        dueDate: today,
         completed: true,
+        placedOnColumnAt: addDaysToDateKey(today, -5),
+        completedAt: addDaysToDateKey(today, -1),
+        links: [],
+        milestones: [
+          {
+            id: generateId('ms'),
+            title: 'Rules Audit',
+            date: addDaysToDateKey(today, -2),
+          },
+        ],
         position: 1000,
       },
     ];
@@ -601,6 +867,10 @@ export async function createBoard(
         tags: sanitizeTags(t.tags),
         dueDate: t.dueDate,
         completed: t.completed,
+        placedOnColumnAt: t.placedOnColumnAt,
+        completedAt: t.completedAt,
+        links: t.links,
+        milestones: t.milestones,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -693,6 +963,18 @@ export async function deleteBoard(boardId: string): Promise<void> {
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `boards/${boardId}/invites`);
+  }
+
+  // Delete all task chat messages
+  try {
+    const msgSnaps = await getDocs(collection(db, 'boards', boardId, 'messages'));
+    if (!msgSnaps.empty) {
+      const msgBatch = writeBatch(db);
+      msgSnaps.docs.forEach((m) => msgBatch.delete(m.ref));
+      await msgBatch.commit();
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `boards/${boardId}/messages`);
   }
 
   // Delete all members and their boardRefs
@@ -846,6 +1128,9 @@ export async function createTask(
     tags?: string[];
     dueDate?: string;
     assigneeId?: string;
+    placedOnColumnAt?: string;
+    links?: TaskLink[];
+    milestones?: TaskMilestone[];
   }
 ): Promise<string> {
   assertValidId(actorUid, 'userId');
@@ -857,6 +1142,7 @@ export async function createTask(
 
   const cleanTitle = sanitizeText(input.title, LIMITS.TASK_TITLE_MAX);
   if (!cleanTitle) throw new Error('Task title cannot be empty.');
+  const placedAt = sanitizeDateKey(input.placedOnColumnAt) || getTodayDateKey();
 
   const taskId = generateId('tsk');
   const path = `boards/${board.id}/tasks/${taskId}`;
@@ -873,8 +1159,12 @@ export async function createTask(
       priority: input.priority ?? 'medium',
       position: clampPosition(input.position),
       tags: sanitizeTags(input.tags ?? []),
-      dueDate: sanitizeText(input.dueDate ?? '', LIMITS.TASK_DUE_DATE_MAX),
+      dueDate: sanitizeDateKey(input.dueDate),
       completed: false,
+      placedOnColumnAt: placedAt,
+      completedAt: '',
+      links: sanitizeTaskLinks(input.links),
+      milestones: sanitizeTaskMilestones(input.milestones),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -888,19 +1178,24 @@ export async function moveTask(
   boardId: string,
   taskId: string,
   columnId: string,
-  position: number
+  position: number,
+  columnChanged = true
 ): Promise<void> {
   assertValidId(boardId, 'boardId');
   assertValidId(taskId, 'taskId');
   assertValidId(columnId, 'columnId');
 
   const path = `boards/${boardId}/tasks/${taskId}`;
+  const payload: Record<string, unknown> = {
+    columnId,
+    position: clampPosition(position),
+    updatedAt: serverTimestamp(),
+  };
+  if (columnChanged) {
+    payload.placedOnColumnAt = getTodayDateKey();
+  }
   try {
-    await updateDoc(doc(db, 'boards', boardId, 'tasks', taskId), {
-      columnId,
-      position: clampPosition(position),
-      updatedAt: serverTimestamp(),
-    });
+    await updateDoc(doc(db, 'boards', boardId, 'tasks', taskId), payload);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -916,7 +1211,11 @@ export async function updateTaskDetails(
     tags: string[];
     dueDate: string;
     completed: boolean;
+    completedAt?: string;
+    placedOnColumnAt?: string;
     assigneeId: string;
+    links?: TaskLink[];
+    milestones?: TaskMilestone[];
   }
 ): Promise<void> {
   assertValidId(boardId, 'boardId');
@@ -927,6 +1226,10 @@ export async function updateTaskDetails(
 
   const cleanTitle = sanitizeText(input.title, LIMITS.TASK_TITLE_MAX);
   if (!cleanTitle) throw new Error('Task title cannot be empty.');
+  const cleanCompletedAt = input.completed
+    ? sanitizeDateKey(input.completedAt) || getTodayDateKey()
+    : '';
+  const cleanPlacedAt = sanitizeDateKey(input.placedOnColumnAt) || getTodayDateKey();
 
   const path = `boards/${boardId}/tasks/${taskId}`;
   try {
@@ -935,9 +1238,13 @@ export async function updateTaskDetails(
       description: sanitizeText(input.description, LIMITS.TASK_DESC_MAX),
       priority: input.priority,
       tags: sanitizeTags(input.tags),
-      dueDate: sanitizeText(input.dueDate, LIMITS.TASK_DUE_DATE_MAX),
+      dueDate: sanitizeDateKey(input.dueDate),
       completed: input.completed,
+      completedAt: cleanCompletedAt,
+      placedOnColumnAt: cleanPlacedAt,
       assigneeId: input.assigneeId,
+      links: sanitizeTaskLinks(input.links),
+      milestones: sanitizeTaskMilestones(input.milestones),
       updatedAt: serverTimestamp(),
     });
   } catch (error) {
@@ -957,6 +1264,7 @@ export async function toggleTaskCompleted(
   try {
     await updateDoc(doc(db, 'boards', boardId, 'tasks', taskId), {
       completed,
+      completedAt: completed ? getTodayDateKey() : '',
       updatedAt: serverTimestamp(),
     });
   } catch (error) {
@@ -978,6 +1286,20 @@ export async function deleteTask(boardId: string, taskId: string): Promise<void>
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, subtasksPath);
+  }
+
+  const messagesPath = `boards/${boardId}/messages`;
+  try {
+    const msgSnaps = await getDocs(
+      query(collection(db, 'boards', boardId, 'messages'), where('taskId', '==', taskId))
+    );
+    if (!msgSnaps.empty) {
+      const batch = writeBatch(db);
+      msgSnaps.docs.forEach((m) => batch.delete(m.ref));
+      await batch.commit();
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, messagesPath);
   }
 
   const path = `boards/${boardId}/tasks/${taskId}`;
@@ -1056,6 +1378,57 @@ export async function deleteSubtask(
   const path = `boards/${boardId}/tasks/${taskId}/subtasks/${subtaskId}`;
   try {
     await deleteDoc(doc(db, 'boards', boardId, 'tasks', taskId, 'subtasks', subtaskId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function sendTaskMessage(
+  actorUid: string,
+  senderName: string,
+  board: Board,
+  task: Pick<Task, 'id' | 'title'>,
+  text: string
+): Promise<string> {
+  assertValidId(actorUid, 'userId');
+  assertValidId(board.id, 'boardId');
+  assertValidId(task.id, 'taskId');
+
+  const cleanText = sanitizeText(text, LIMITS.MESSAGE_TEXT_MAX);
+  if (!cleanText) throw new Error('Message cannot be empty.');
+  const cleanSender =
+    sanitizeText(senderName || 'Team Member', LIMITS.USER_DISPLAY_NAME_MAX) || 'Team Member';
+  const cleanTaskTitle =
+    sanitizeText(task.title || 'Untitled Task', LIMITS.TASK_TITLE_MAX) || 'Untitled Task';
+
+  const messageId = generateId('msg');
+  const path = `boards/${board.id}/messages/${messageId}`;
+  try {
+    await setDoc(doc(db, 'boards', board.id, 'messages', messageId), {
+      id: messageId,
+      boardId: board.id,
+      taskId: task.id,
+      taskTitle: cleanTaskTitle,
+      ownerId: board.ownerId,
+      senderId: actorUid,
+      senderName: cleanSender,
+      text: cleanText,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+  return messageId;
+}
+
+export async function deleteTaskMessage(boardId: string, messageId: string): Promise<void> {
+  assertValidId(boardId, 'boardId');
+  assertValidId(messageId, 'messageId');
+
+  const path = `boards/${boardId}/messages/${messageId}`;
+  try {
+    await deleteDoc(doc(db, 'boards', boardId, 'messages', messageId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }

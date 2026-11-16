@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import {
+  CalendarDays,
+  Columns3,
   Menu,
+  MessageSquare,
   Moon,
   Plus,
   Search,
@@ -11,7 +14,9 @@ import {
   X,
 } from 'lucide-react';
 import { AdminPanelModal } from './components/AdminPanelModal';
+import { AllChatsModal } from './components/AllChatsModal';
 import { BoardModal } from './components/BoardModal';
+import { CalendarTimelineView } from './components/CalendarTimelineView';
 import { ColumnSettingsModal } from './components/ColumnSettingsModal';
 import { CreateTaskModal } from './components/CreateTaskModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -29,7 +34,9 @@ import {
   ensureUserAndStarterWorkspace,
   moveTask,
   subscribeAccessibleBoards,
+  subscribeAllBoardsMessages,
   subscribeBoardMembers,
+  subscribeBoardMessages,
   subscribeColumns,
   subscribeTasks,
   subscribeUserProfile,
@@ -45,6 +52,7 @@ import {
   type Column,
   type Priority,
   type Task,
+  type TaskMessage,
   type ThemeMode,
   type UserProfile,
 } from './types/kanban';
@@ -76,6 +84,8 @@ function WorkspaceApp() {
   const [columns, setColumns] = useState<Column[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [members, setMembers] = useState<BoardMember[]>([]);
+  const [boardMessages, setBoardMessages] = useState<TaskMessage[]>([]);
+  const [allMessages, setAllMessages] = useState<TaskMessage[]>([]);
 
   const [theme, setTheme] = useState<ThemeMode>(() => {
     if (typeof window !== 'undefined') {
@@ -85,7 +95,8 @@ function WorkspaceApp() {
     return 'light';
   });
 
-  // Filters & search
+  // Filters, search & view mode
+  const [viewMode, setViewMode] = useState<'board' | 'calendar'>('board');
   const [searchQuery, setSearchQuery] = useState('');
   const [priorityFilter, setPriorityFilter] = useState<'all' | Priority>('all');
   const [hideCompleted, setHideCompleted] = useState(false);
@@ -97,6 +108,7 @@ function WorkspaceApp() {
     board?: Board;
   } | null>(null);
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [allChatsOpen, setAllChatsOpen] = useState(false);
   const [joinModalState, setJoinModalState] = useState<{
     boardId?: string;
     inviteId?: string;
@@ -104,6 +116,8 @@ function WorkspaceApp() {
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const [createTaskOpen, setCreateTaskOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [taskModalFocusChat, setTaskModalFocusChat] = useState(false);
+  const [pendingOpenTask, setPendingOpenTask] = useState<{ boardId: string; taskId: string } | null>(null);
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
 
   // Add column inline composer
@@ -142,6 +156,8 @@ function WorkspaceApp() {
         setColumns([]);
         setTasks([]);
         setMembers([]);
+        setBoardMessages([]);
+        setAllMessages([]);
         return;
       }
 
@@ -199,24 +215,47 @@ function WorkspaceApp() {
     };
   }, [user, workspaceReady, isBootstrapAdmin]);
 
-  // Subscribe to columns, tasks, and members for active board
+  // Subscribe to all task chats across accessible boards for the top-bar All Chats hub
+  useEffect(() => {
+    if (!user || !workspaceReady) {
+      setAllMessages([]);
+      return;
+    }
+    const unsubAllMessages = subscribeAllBoardsMessages(boards, setAllMessages);
+    return () => unsubAllMessages();
+  }, [user, workspaceReady, boards]);
+
+  // Subscribe to columns, tasks, members, and messages for active board
   useEffect(() => {
     if (!user || !workspaceReady || !activeBoardId) {
       setColumns([]);
       setTasks([]);
       setMembers([]);
+      setBoardMessages([]);
       return;
     }
 
     const unsubCols = subscribeColumns(activeBoardId, setColumns);
     const unsubTasks = subscribeTasks(activeBoardId, setTasks);
     const unsubMembers = subscribeBoardMembers(activeBoardId, setMembers);
+    const unsubMessages = subscribeBoardMessages(activeBoardId, setBoardMessages);
     return () => {
       unsubCols();
       unsubTasks();
       unsubMembers();
+      unsubMessages();
     };
   }, [user, workspaceReady, activeBoardId]);
+
+  // Resolve cross-board task navigation from All Chats modal
+  useEffect(() => {
+    if (!pendingOpenTask) return;
+    if (activeBoardId === pendingOpenTask.boardId && tasks.some((t) => t.id === pendingOpenTask.taskId)) {
+      setSelectedTaskId(pendingOpenTask.taskId);
+      setTaskModalFocusChat(true);
+      setPendingOpenTask(null);
+    }
+  }, [pendingOpenTask, activeBoardId, tasks]);
 
   if (asyncError) {
     throw asyncError;
@@ -295,41 +334,65 @@ function WorkspaceApp() {
     };
   }, [activeBoard, user, isAdmin, members]);
 
-  // Assignee dropdown options (Creator + Members)
+  // Assignee dropdown options (Creator + Members + current Admin)
   const assigneeOptions = useMemo(() => {
     if (!activeBoard) return [];
-    const options: Array<{ uid: string; label: string }> = [];
+    const options: Array<{ uid: string; label: string; shortName: string }> = [];
     const seen = new Set<string>();
 
     if (user && activeBoard.ownerId === user.uid) {
-      options.push({ uid: user.uid, label: `${profile?.displayName || 'You'} (Creator)` });
+      const name = profile?.displayName || 'You';
+      options.push({ uid: user.uid, label: `${name} (Creator)`, shortName: name });
       seen.add(user.uid);
     } else {
-      options.push({ uid: activeBoard.ownerId, label: 'Board Creator' });
+      const creatorName = activeBoard.ownerDisplayName || 'Board Creator';
+      options.push({
+        uid: activeBoard.ownerId,
+        label: activeBoard.ownerDisplayName ? `${creatorName} (Creator)` : 'Board Creator',
+        shortName: creatorName,
+      });
       seen.add(activeBoard.ownerId);
     }
 
     members.forEach((m) => {
       if (!seen.has(m.uid)) {
-        options.push({ uid: m.uid, label: m.displayName });
+        const roleLabel = ROLE_PRESETS[m.role]?.label ?? m.role;
+        options.push({
+          uid: m.uid,
+          label: `${m.displayName} (${roleLabel})`,
+          shortName: m.displayName,
+        });
         seen.add(m.uid);
       }
     });
 
     if (user && !seen.has(user.uid)) {
-      options.push({ uid: user.uid, label: profile?.displayName || 'You' });
+      const myName = profile?.displayName || 'You';
+      options.push({
+        uid: user.uid,
+        label: isAdmin ? `${myName} (Admin)` : myName,
+        shortName: myName,
+      });
     }
 
     return options;
-  }, [activeBoard, members, user, profile]);
+  }, [activeBoard, members, user, profile, isAdmin]);
 
   const assigneeNameMap = useMemo(() => {
     const map: Record<string, string> = {};
     assigneeOptions.forEach((opt) => {
-      map[opt.uid] = opt.label;
+      map[opt.uid] = opt.shortName;
     });
     return map;
   }, [assigneeOptions]);
+
+  const messageCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const msg of boardMessages) {
+      counts[msg.taskId] = (counts[msg.taskId] ?? 0) + 1;
+    }
+    return counts;
+  }, [boardMessages]);
 
   const filteredTasks = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -340,11 +403,14 @@ function WorkspaceApp() {
         const matchesTitle = t.title.toLowerCase().includes(q);
         const matchesDesc = t.description.toLowerCase().includes(q);
         const matchesTag = t.tags.some((tag) => tag.toLowerCase().includes(q));
-        if (!matchesTitle && !matchesDesc && !matchesTag) return false;
+        const matchesAssignee = t.assigneeId
+          ? (assigneeNameMap[t.assigneeId]?.toLowerCase().includes(q) ?? false)
+          : false;
+        if (!matchesTitle && !matchesDesc && !matchesTag && !matchesAssignee) return false;
       }
       return true;
     });
-  }, [tasks, hideCompleted, priorityFilter, searchQuery]);
+  }, [tasks, hideCompleted, priorityFilter, searchQuery, assigneeNameMap]);
 
   const completedCount = useMemo(() => tasks.filter((t) => t.completed).length, [tasks]);
 
@@ -359,9 +425,21 @@ function WorkspaceApp() {
   const handleSelectBoard = async (boardId: string) => {
     setActiveBoardId(boardId);
     setSelectedTaskId(null);
+    setTaskModalFocusChat(false);
     setEditingColumnId(null);
     if (user) {
       await updateUserActiveBoard(user.uid, boardId);
+    }
+  };
+
+  const handleOpenTaskFromChats = async (boardId: string, taskId: string) => {
+    setAllChatsOpen(false);
+    if (activeBoardId === boardId) {
+      setSelectedTaskId(taskId);
+      setTaskModalFocusChat(true);
+    } else {
+      setPendingOpenTask({ boardId, taskId });
+      await handleSelectBoard(boardId);
     }
   };
 
@@ -460,7 +538,13 @@ function WorkspaceApp() {
     }
 
     const nextPosition = computeInsertPosition(colTasks, adjustedIndex);
-    await moveTask(activeBoardId, taskToMove.id, targetColumnId, nextPosition);
+    await moveTask(
+      activeBoardId,
+      taskToMove.id,
+      targetColumnId,
+      nextPosition,
+      taskToMove.columnId !== targetColumnId
+    );
   };
 
   if (!authReady) {
@@ -558,6 +642,17 @@ function WorkspaceApp() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setAllChatsOpen(true)}
+              aria-label="View all task chats"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 tabular-nums"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span>Chats</span>
+              {allMessages.length > 0 && <span>· {allMessages.length}</span>}
+            </button>
+
             {activeBoard && (
               <button
                 type="button"
@@ -668,16 +763,57 @@ function WorkspaceApp() {
               </button>
             </div>
 
-            <div className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap shrink-0">
-              {effectivePermissions.roleLabel} · {tasks.length}{' '}
-              {tasks.length === 1 ? 'task' : 'tasks'} · {completedCount} completed ·{' '}
-              {columns.length} {columns.length === 1 ? 'column' : 'columns'}
+            <div className="flex items-center gap-3 shrink-0">
+              <div
+                role="group"
+                aria-label="Workspace view"
+                className="flex items-center gap-0.5 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg"
+              >
+                <button
+                  type="button"
+                  onClick={() => setViewMode('board')}
+                  aria-pressed={viewMode === 'board'}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                    viewMode === 'board'
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                  }`}
+                >
+                  <Columns3 className="w-3.5 h-3.5" />
+                  <span>Board</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('calendar')}
+                  aria-pressed={viewMode === 'calendar'}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                    viewMode === 'calendar'
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                  }`}
+                >
+                  <CalendarDays className="w-3.5 h-3.5" />
+                  <span>Calendar</span>
+                </button>
+              </div>
+
+              <div className="hidden md:block text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap shrink-0">
+                {effectivePermissions.roleLabel} · {tasks.length}{' '}
+                {tasks.length === 1 ? 'task' : 'tasks'} · {completedCount} completed ·{' '}
+                {columns.length} {columns.length === 1 ? 'column' : 'columns'}
+              </div>
             </div>
           </div>
         )}
 
-        {/* Main Kanban Board Canvas */}
-        <main className="flex-1 overflow-x-auto overflow-y-hidden p-4 sm:p-6">
+        {/* Main Workspace Canvas */}
+        <main
+          className={`flex-1 p-4 sm:p-6 ${
+            activeBoard && viewMode === 'calendar'
+              ? 'overflow-hidden flex flex-col'
+              : 'overflow-x-auto overflow-y-hidden'
+          }`}
+        >
           {!activeBoard ? (
             <div className="h-full flex items-center justify-center">
               <div className="max-w-sm text-center space-y-3">
@@ -706,6 +842,22 @@ function WorkspaceApp() {
                 </div>
               </div>
             </div>
+          ) : viewMode === 'calendar' ? (
+            <CalendarTimelineView
+              board={activeBoard}
+              columns={columns}
+              tasks={filteredTasks}
+              assigneeNames={assigneeNameMap}
+              messageCounts={messageCounts}
+              canToggleComplete={effectivePermissions.canEditTasks}
+              onSelectTask={(task) => {
+                setTaskModalFocusChat(false);
+                setSelectedTaskId(task.id);
+              }}
+              onToggleTaskComplete={(task) =>
+                toggleTaskCompleted(activeBoard.id, task.id, !task.completed)
+              }
+            />
           ) : (
             <div className="h-full flex items-start gap-4 min-w-max">
               {columns.map((col) => {
@@ -722,13 +874,17 @@ function WorkspaceApp() {
                     canEditTasks={effectivePermissions.canEditTasks}
                     canManageColumns={effectivePermissions.canManageColumns}
                     assigneeNames={assigneeNameMap}
+                    messageCounts={messageCounts}
                     draggedTaskId={draggedTask?.id ?? null}
                     dropTarget={dropTarget}
                     onDragStartTask={handleDragStartTask}
                     onDragEndTask={handleDragEndTask}
                     onDragOverColumn={handleDragOverColumn}
                     onDropOnColumn={handleDropOnColumn}
-                    onSelectTask={(task) => setSelectedTaskId(task.id)}
+                    onSelectTask={(task) => {
+                      setTaskModalFocusChat(false);
+                      setSelectedTaskId(task.id);
+                    }}
                     onToggleTaskComplete={(task) =>
                       toggleTaskCompleted(activeBoard.id, task.id, !task.completed)
                     }
@@ -801,6 +957,7 @@ function WorkspaceApp() {
       {boardModalState && (
         <BoardModal
           uid={user.uid}
+          ownerDisplayName={profile?.displayName}
           mode={boardModalState.mode}
           board={boardModalState.board}
           isAdmin={isAdmin}
@@ -812,6 +969,21 @@ function WorkspaceApp() {
             }
           }}
           onClose={() => setBoardModalState(null)}
+        />
+      )}
+
+      {allChatsOpen && (
+        <AllChatsModal
+          uid={user.uid}
+          senderName={profile?.displayName || user.displayName || 'Team Member'}
+          isAdmin={isAdmin}
+          boards={boards}
+          activeBoard={activeBoard}
+          activeBoardColumns={columns}
+          activeBoardTasks={tasks}
+          allMessages={allMessages}
+          onOpenTask={handleOpenTaskFromChats}
+          onClose={() => setAllChatsOpen(false)}
         />
       )}
 
@@ -858,15 +1030,22 @@ function WorkspaceApp() {
       {selectedTask && activeBoard && (
         <TaskDetailModal
           uid={user.uid}
+          senderName={profile?.displayName || user.displayName || 'Team Member'}
+          isAdmin={isAdmin}
           board={activeBoard}
           task={selectedTask}
           columns={columns}
           allTasks={tasks}
+          messages={boardMessages}
           assigneeOptions={assigneeOptions}
           canCreateTasks={effectivePermissions.canCreateTasks}
           canEditTasks={effectivePermissions.canEditTasks}
           canDeleteTasks={effectivePermissions.canDeleteTasks}
-          onClose={() => setSelectedTaskId(null)}
+          initialFocusChat={taskModalFocusChat}
+          onClose={() => {
+            setSelectedTaskId(null);
+            setTaskModalFocusChat(false);
+          }}
         />
       )}
 

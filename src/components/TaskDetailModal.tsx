@@ -1,66 +1,134 @@
-import { useEffect, useState } from 'react';
-import { Check, Circle, Plus, Trash2, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  BookOpen,
+  Check,
+  Circle,
+  ExternalLink,
+  FileText,
+  Flag,
+  GitBranch,
+  Link2,
+  MessageSquare,
+  Plus,
+  Send,
+  Trash2,
+  X,
+} from 'lucide-react';
 import {
   createSubtask,
   deleteSubtask,
   deleteTask,
+  deleteTaskMessage,
+  generateId,
+  getTodayDateKey,
+  inferLinkKind,
   moveTask,
+  normalizeTaskUrl,
+  sendTaskMessage,
   subscribeSubtasks,
   toggleSubtaskCompleted,
   updateTaskDetails,
 } from '../lib/kanbanService';
-import { LIMITS, type Board, type Column, type Priority, type Subtask, type Task } from '../types/kanban';
+import {
+  LIMITS,
+  type Board,
+  type Column,
+  type Priority,
+  type Subtask,
+  type Task,
+  type TaskLink,
+  type TaskLinkKind,
+  type TaskMessage,
+  type TaskMilestone,
+} from '../types/kanban';
 
 interface TaskDetailModalProps {
   uid: string;
+  senderName: string;
+  isAdmin: boolean;
   board: Board;
   task: Task;
   columns: Column[];
   allTasks: Task[];
+  messages: TaskMessage[];
   assigneeOptions: Array<{ uid: string; label: string }>;
   canCreateTasks: boolean;
   canEditTasks: boolean;
   canDeleteTasks: boolean;
+  initialFocusChat?: boolean;
   onClose: () => void;
 }
 
 export function TaskDetailModal({
   uid,
+  senderName,
+  isAdmin,
   board,
   task,
   columns,
   allTasks,
+  messages,
   assigneeOptions,
   canCreateTasks,
   canEditTasks,
   canDeleteTasks,
+  initialFocusChat = false,
   onClose,
 }: TaskDetailModalProps) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
   const [priority, setPriority] = useState<Priority>(task.priority);
   const [dueDate, setDueDate] = useState(task.dueDate);
+  const [placedOnColumnAt, setPlacedOnColumnAt] = useState(task.placedOnColumnAt ?? '');
   const [completed, setCompleted] = useState(task.completed);
+  const [completedAt, setCompletedAt] = useState(task.completedAt ?? '');
   const [columnId, setColumnId] = useState(task.columnId);
   const [assigneeId, setAssigneeId] = useState(task.assigneeId ?? '');
   const [tags, setTags] = useState<string[]>(task.tags);
   const [tagInput, setTagInput] = useState('');
 
+  const [links, setLinks] = useState<TaskLink[]>(task.links ?? []);
+  const [linkUrl, setLinkUrl] = useState('');
+  const [linkLabel, setLinkLabel] = useState('');
+  const [linkKind, setLinkKind] = useState<TaskLinkKind>('repo');
+  const [linkKindManual, setLinkKindManual] = useState(false);
+
+  const [milestones, setMilestones] = useState<TaskMilestone[]>(task.milestones ?? []);
+  const [milestoneTitle, setMilestoneTitle] = useState('');
+  const [milestoneDate, setMilestoneDate] = useState('');
+
   const [subtasks, setSubtasks] = useState<Subtask[]>([]);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
+  const [newMessageText, setNewMessageText] = useState('');
+  const [sendingMessage, setSendingMessage] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const chatSectionRef = useRef<HTMLDivElement | null>(null);
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  const taskMessages = useMemo(
+    () => messages.filter((m) => m.taskId === task.id),
+    [messages, task.id]
+  );
+
+  const canPostChat = isAdmin || board.status === 'active';
 
   useEffect(() => {
     setTitle(task.title);
     setDescription(task.description);
     setPriority(task.priority);
     setDueDate(task.dueDate);
+    setPlacedOnColumnAt(task.placedOnColumnAt ?? '');
     setCompleted(task.completed);
+    setCompletedAt(task.completedAt ?? '');
     setColumnId(task.columnId);
     setAssigneeId(task.assigneeId ?? '');
     setTags(task.tags);
+    setLinks(task.links ?? []);
+    setMilestones(task.milestones ?? []);
   }, [task]);
 
   useEffect(() => {
@@ -76,6 +144,19 @@ export function TaskDetailModal({
     return () => window.removeEventListener('keydown', handleKey);
   }, [onClose]);
 
+  useEffect(() => {
+    if (initialFocusChat) {
+      chatSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      chatInputRef.current?.focus();
+    }
+  }, [initialFocusChat, task.id]);
+
+  useEffect(() => {
+    if (taskMessages.length > 0) {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [taskMessages.length]);
+
   const handleAddTag = () => {
     if (!canEditTasks) return;
     const clean = tagInput.trim().slice(0, LIMITS.TASK_TAG_LENGTH_MAX);
@@ -86,6 +167,39 @@ export function TaskDetailModal({
     }
     setTags([...tags, clean]);
     setTagInput('');
+  };
+
+  const handleAddLink = () => {
+    if (!canEditTasks || !linkUrl.trim() || links.length >= LIMITS.TASK_LINKS_MAX) return;
+    setErrorMsg(null);
+    try {
+      const normalized = normalizeTaskUrl(linkUrl);
+      if (links.some((l) => l.url === normalized)) {
+        setErrorMsg('That URL is already linked to this task.');
+        return;
+      }
+      const hostFallback = new URL(normalized).hostname.replace(/^www\./, '');
+      const cleanLabel = linkLabel.trim().slice(0, LIMITS.TASK_LINK_LABEL_MAX) || hostFallback;
+      const finalKind = linkKindManual ? linkKind : inferLinkKind(normalized);
+      setLinks([...links, { label: cleanLabel, url: normalized, kind: finalKind }]);
+      setLinkUrl('');
+      setLinkLabel('');
+      setLinkKind('repo');
+      setLinkKindManual(false);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Invalid link URL.');
+    }
+  };
+
+  const handleAddMilestone = () => {
+    if (!canEditTasks || milestones.length >= LIMITS.TASK_MILESTONES_MAX) return;
+    const cleanTitle = milestoneTitle.trim().slice(0, LIMITS.TASK_MILESTONE_TITLE_MAX);
+    if (!cleanTitle || !milestoneDate) return;
+    const next = [...milestones, { id: generateId('ms'), title: cleanTitle, date: milestoneDate }];
+    next.sort((a, b) => a.date.localeCompare(b.date));
+    setMilestones(next);
+    setMilestoneTitle('');
+    setMilestoneDate('');
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -99,10 +213,30 @@ export function TaskDetailModal({
     setSaving(true);
     setErrorMsg(null);
     try {
+      const finalLinks = [...links];
+      if (linkUrl.trim() && finalLinks.length < LIMITS.TASK_LINKS_MAX) {
+        const normalized = normalizeTaskUrl(linkUrl);
+        if (!finalLinks.some((l) => l.url === normalized)) {
+          const hostFallback = new URL(normalized).hostname.replace(/^www\./, '');
+          const cleanLabel = linkLabel.trim().slice(0, LIMITS.TASK_LINK_LABEL_MAX) || hostFallback;
+          const finalKind = linkKindManual ? linkKind : inferLinkKind(normalized);
+          finalLinks.push({ label: cleanLabel, url: normalized, kind: finalKind });
+        }
+      }
+
+      const finalMilestones = [...milestones];
+      if (milestoneTitle.trim() && milestoneDate && finalMilestones.length < LIMITS.TASK_MILESTONES_MAX) {
+        finalMilestones.push({
+          id: generateId('ms'),
+          title: milestoneTitle.trim().slice(0, LIMITS.TASK_MILESTONE_TITLE_MAX),
+          date: milestoneDate,
+        });
+      }
+
       if (columnId !== task.columnId) {
         const targetColTasks = allTasks.filter((t) => t.columnId === columnId);
         const maxPos = targetColTasks.reduce((m, t) => Math.max(m, t.position), 0);
-        await moveTask(board.id, task.id, columnId, maxPos + 1000);
+        await moveTask(board.id, task.id, columnId, maxPos + 1000, true);
       }
       await updateTaskDetails(board.id, task.id, {
         title,
@@ -111,7 +245,11 @@ export function TaskDetailModal({
         tags,
         dueDate,
         completed,
+        completedAt,
+        placedOnColumnAt,
         assigneeId,
+        links: finalLinks,
+        milestones: finalMilestones,
       });
       onClose();
     } catch (err) {
@@ -141,6 +279,22 @@ export function TaskDetailModal({
     }
   };
 
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = newMessageText.trim();
+    if (!clean || sendingMessage || !canPostChat) return;
+    setSendingMessage(true);
+    setErrorMsg(null);
+    try {
+      await sendTaskMessage(uid, senderName, board, { id: task.id, title: title.trim() || task.title }, clean);
+      setNewMessageText('');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to send chat message.');
+    } finally {
+      setSendingMessage(false);
+    }
+  };
+
   const completedSubtasks = subtasks.filter((s) => s.completed).length;
 
   return (
@@ -156,7 +310,11 @@ export function TaskDetailModal({
             <button
               type="button"
               disabled={!canEditTasks}
-              onClick={() => setCompleted(!completed)}
+              onClick={() => {
+                const nextCompleted = !completed;
+                setCompleted(nextCompleted);
+                setCompletedAt(nextCompleted ? completedAt || getTodayDateKey() : '');
+              }}
               className={`inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
                 completed
                   ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
@@ -212,7 +370,15 @@ export function TaskDetailModal({
                   id="task-col-select"
                   disabled={!canEditTasks}
                   value={columnId}
-                  onChange={(e) => setColumnId(e.target.value)}
+                  onChange={(e) => {
+                    const nextCol = e.target.value;
+                    setColumnId(nextCol);
+                    setPlacedOnColumnAt(
+                      nextCol !== task.columnId
+                        ? getTodayDateKey()
+                        : (task.placedOnColumnAt ?? '')
+                    );
+                  }}
                   className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:opacity-60"
                 >
                   {columns.map((c) => (
@@ -242,9 +408,20 @@ export function TaskDetailModal({
               </div>
 
               <div className="space-y-1.5">
-                <label htmlFor="task-assignee-select" className="block text-xs font-medium text-slate-600 dark:text-slate-400">
-                  Assignee
-                </label>
+                <div className="flex items-center justify-between gap-2">
+                  <label htmlFor="task-assignee-select" className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+                    Assignee
+                  </label>
+                  {canEditTasks && assigneeId !== uid && assigneeOptions.some((opt) => opt.uid === uid) && (
+                    <button
+                      type="button"
+                      onClick={() => setAssigneeId(uid)}
+                      className="text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap"
+                    >
+                      Assign to me
+                    </button>
+                  )}
+                </div>
                 <select
                   id="task-assignee-select"
                   disabled={!canEditTasks}
@@ -290,6 +467,245 @@ export function TaskDetailModal({
                 placeholder="Add implementation context, acceptance criteria, or links..."
                 className="w-full px-3.5 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:opacity-60"
               />
+            </div>
+
+            {/* Timeline & Important Dates */}
+            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  Timeline &amp; Important Dates
+                </span>
+                <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                  {milestones.length}/{LIMITS.TASK_MILESTONES_MAX} milestones
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label htmlFor="task-placed-input" className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+                    Placed on Column
+                  </label>
+                  <input
+                    id="task-placed-input"
+                    type="date"
+                    disabled={!canEditTasks}
+                    value={placedOnColumnAt}
+                    onChange={(e) => setPlacedOnColumnAt(e.target.value)}
+                    className="w-full px-3 py-1.5 text-sm font-mono tabular-nums bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:opacity-60"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="task-completed-at-input" className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+                    Completion Date
+                  </label>
+                  <input
+                    id="task-completed-at-input"
+                    type="date"
+                    disabled={!canEditTasks || !completed}
+                    value={completed ? completedAt : ''}
+                    onChange={(e) => setCompletedAt(e.target.value)}
+                    className="w-full px-3 py-1.5 text-sm font-mono tabular-nums bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:opacity-50"
+                  />
+                </div>
+              </div>
+
+              {milestones.length > 0 && (
+                <ul className="space-y-1.5">
+                  {milestones.map((ms) => (
+                    <li
+                      key={ms.id}
+                      className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 text-xs"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Flag className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                        <span className="font-mono tabular-nums text-slate-500 dark:text-slate-400 shrink-0">
+                          {ms.date}
+                        </span>
+                        <span className="font-medium text-slate-800 dark:text-slate-200 truncate">
+                          {ms.title}
+                        </span>
+                      </div>
+                      {canEditTasks && (
+                        <button
+                          type="button"
+                          onClick={() => setMilestones(milestones.filter((m) => m.id !== ms.id))}
+                          aria-label={`Remove milestone ${ms.title}`}
+                          className="p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400 shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {canEditTasks && milestones.length < LIMITS.TASK_MILESTONES_MAX && (
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                  <input
+                    type="text"
+                    maxLength={LIMITS.TASK_MILESTONE_TITLE_MAX}
+                    value={milestoneTitle}
+                    onChange={(e) => setMilestoneTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddMilestone();
+                      }
+                    }}
+                    placeholder="Important date or milestone..."
+                    aria-label="Milestone title"
+                    className="sm:col-span-6 px-3 py-1.5 text-xs bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  />
+                  <input
+                    type="date"
+                    value={milestoneDate}
+                    onChange={(e) => setMilestoneDate(e.target.value)}
+                    aria-label="Milestone date"
+                    className="sm:col-span-4 px-2.5 py-1.5 text-xs font-mono tabular-nums bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddMilestone}
+                    disabled={!milestoneTitle.trim() || !milestoneDate}
+                    className="sm:col-span-2 inline-flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50 rounded-lg whitespace-nowrap"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Files & Repo Links */}
+            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  Files &amp; Repo Links
+                </span>
+                <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                  {links.length}/{LIMITS.TASK_LINKS_MAX}
+                </span>
+              </div>
+
+              {links.length > 0 ? (
+                <ul className="space-y-1.5">
+                  {links.map((link) => {
+                    const icon =
+                      link.kind === 'repo' ? (
+                        <GitBranch className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
+                      ) : link.kind === 'file' ? (
+                        <FileText className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
+                      ) : link.kind === 'doc' ? (
+                        <BookOpen className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
+                      ) : (
+                        <Link2 className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
+                      );
+                    return (
+                      <li
+                        key={link.url}
+                        className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60"
+                      >
+                        <a
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2.5 min-w-0 flex-1 group"
+                        >
+                          {icon}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 group-hover:underline truncate">
+                              <span className="truncate">{link.label}</span>
+                              <ExternalLink className="w-3 h-3 shrink-0 opacity-75" />
+                            </div>
+                            <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                              {link.url}
+                            </div>
+                          </div>
+                        </a>
+                        {canEditTasks && (
+                          <button
+                            type="button"
+                            onClick={() => setLinks(links.filter((l) => l.url !== link.url))}
+                            aria-label={`Remove link ${link.label}`}
+                            className="p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400 shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  No repository or file links attached yet.
+                </p>
+              )}
+
+              {canEditTasks && links.length < LIMITS.TASK_LINKS_MAX && (
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                  <input
+                    type="url"
+                    value={linkUrl}
+                    onChange={(e) => {
+                      const nextVal = e.target.value;
+                      setLinkUrl(nextVal);
+                      if (!linkKindManual && nextVal.trim()) {
+                        setLinkKind(inferLinkKind(nextVal));
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddLink();
+                      }
+                    }}
+                    placeholder="https://github.com/org/repo or file URL"
+                    aria-label="Link URL"
+                    className="sm:col-span-5 px-3 py-1.5 text-xs bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  />
+                  <input
+                    type="text"
+                    maxLength={LIMITS.TASK_LINK_LABEL_MAX}
+                    value={linkLabel}
+                    onChange={(e) => setLinkLabel(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddLink();
+                      }
+                    }}
+                    placeholder="Label (optional)"
+                    aria-label="Link label"
+                    className="sm:col-span-3 px-2.5 py-1.5 text-xs bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  />
+                  <select
+                    value={linkKind}
+                    aria-label="Link type"
+                    onChange={(e) => {
+                      setLinkKind(e.target.value as TaskLinkKind);
+                      setLinkKindManual(true);
+                    }}
+                    className="sm:col-span-2 px-2 py-1.5 text-xs bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  >
+                    <option value="repo">Repo</option>
+                    <option value="file">File</option>
+                    <option value="doc">Doc</option>
+                    <option value="other">Link</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleAddLink}
+                    disabled={!linkUrl.trim()}
+                    className="sm:col-span-2 inline-flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50 rounded-lg whitespace-nowrap"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Tags */}
@@ -421,6 +837,110 @@ export function TaskDetailModal({
                   <span>Add</span>
                 </button>
               </form>
+            )}
+          </div>
+
+          {/* Task Chat Log */}
+          <div
+            ref={chatSectionRef}
+            className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
+                <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  Chat Log
+                </h3>
+              </div>
+              <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                {taskMessages.length} {taskMessages.length === 1 ? 'message' : 'messages'}
+              </span>
+            </div>
+
+            {taskMessages.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-200 dark:border-slate-800 px-4 py-5 text-center text-xs text-slate-500 dark:text-slate-400">
+                No messages on this task yet. Start the discussion below.
+              </div>
+            ) : (
+              <div className="max-h-56 overflow-y-auto space-y-2.5 pr-1">
+                {taskMessages.map((msg) => {
+                  const isMine = msg.senderId === uid;
+                  const canDeleteMsg =
+                    (isAdmin || board.status === 'active') &&
+                    (isAdmin || board.ownerId === uid || isMine);
+                  const timeLabel = msg.createdAt
+                    ? msg.createdAt.toDate().toLocaleString([], {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                      })
+                    : 'Sending...';
+
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`rounded-lg border px-3.5 py-2.5 text-sm space-y-1 ${
+                        isMine
+                          ? 'bg-blue-50/60 dark:bg-blue-950/30 border-blue-200/80 dark:border-blue-900/60'
+                          : 'bg-slate-50 dark:bg-slate-950/60 border-slate-200 dark:border-slate-800'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 text-xs min-w-0">
+                          <span className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                            {isMine ? `${msg.senderName} (You)` : msg.senderName}
+                          </span>
+                          <span aria-hidden="true" className="text-slate-400">·</span>
+                          <span className="font-mono text-[11px] tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                            {timeLabel}
+                          </span>
+                        </div>
+                        {canDeleteMsg && (
+                          <button
+                            type="button"
+                            aria-label="Delete chat message"
+                            onClick={() => deleteTaskMessage(board.id, msg.id)}
+                            className="p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400 rounded shrink-0"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-xs leading-relaxed text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words">
+                        {msg.text}
+                      </p>
+                    </div>
+                  );
+                })}
+                <div ref={chatEndRef} />
+              </div>
+            )}
+
+            {canPostChat ? (
+              <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+                <input
+                  ref={chatInputRef}
+                  type="text"
+                  maxLength={LIMITS.MESSAGE_TEXT_MAX}
+                  value={newMessageText}
+                  onChange={(e) => setNewMessageText(e.target.value)}
+                  placeholder="Write a message to this task's chat log..."
+                  className="flex-1 px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+                <button
+                  type="submit"
+                  disabled={sendingMessage || !newMessageText.trim()}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{sendingMessage ? 'Sending...' : 'Send'}</span>
+                </button>
+              </form>
+            ) : (
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Board is archived. Chat log is read-only.
+              </p>
             )}
           </div>
         </div>

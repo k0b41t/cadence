@@ -10,6 +10,7 @@ interface KanbanColumnProps {
   canEditTasks: boolean;
   canManageColumns: boolean;
   assigneeNames: Record<string, string>;
+  messageCounts: Record<string, number>;
   draggedTaskId: string | null;
   dropTarget: { columnId: string; index: number } | null;
   onDragStartTask: (e: DragEvent<HTMLDivElement>, task: Task) => void;
@@ -29,6 +30,7 @@ export function KanbanColumn({
   canEditTasks,
   canManageColumns,
   assigneeNames,
+  messageCounts,
   draggedTaskId,
   dropTarget,
   onDragStartTask,
@@ -176,6 +178,7 @@ export function KanbanColumn({
                   task={task}
                   canEdit={canEditTasks}
                   assigneeName={task.assigneeId ? assigneeNames[task.assigneeId] : undefined}
+                  messageCount={messageCounts[task.id] ?? 0}
                   isDragging={draggedTaskId === task.id}
                   onDragStart={onDragStartTask}
                   onDragEnd={onDragEndTask}

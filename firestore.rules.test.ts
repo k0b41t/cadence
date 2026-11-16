@@ -265,7 +265,59 @@ async function runTests() {
   // 12. PII Leak Attempt
   await assertFails(getDoc(doc(dbContrib, 'users', CREATOR.uid, 'private', 'info')));
 
-  // Positive assertions: Admin sees all boards; Contributor creates task; Outsider redeems viewer invite atomically
+  // 13. Outsider Assignee Injection
+  await assertFails(
+    updateDoc(doc(dbContrib, 'boards', 'board_1', 'tasks', 'task_1'), {
+      assigneeId: OUTSIDER.uid,
+      title: 'Existing Task',
+      description: '',
+      priority: 'medium',
+      tags: [],
+      dueDate: '',
+      completed: false,
+      updatedAt: serverTimestamp(),
+    })
+  );
+
+  // 14. Chat Sender Spoofing & Outsider Chat Post
+  await assertFails(
+    setDoc(doc(dbOutsider, 'boards', 'board_1', 'messages', 'msg_bad1'), {
+      id: 'msg_bad1',
+      boardId: 'board_1',
+      taskId: 'task_1',
+      taskTitle: 'Existing Task',
+      ownerId: CREATOR.uid,
+      senderId: OUTSIDER.uid,
+      senderName: 'Outsider',
+      text: 'Hello',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertFails(
+    setDoc(doc(dbContrib, 'boards', 'board_1', 'messages', 'msg_bad2'), {
+      id: 'msg_bad2',
+      boardId: 'board_1',
+      taskId: 'task_1',
+      taskTitle: 'Existing Task',
+      ownerId: CREATOR.uid,
+      senderId: CREATOR.uid,
+      senderName: 'Spoofed',
+      text: 'Impersonated message',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+
+  // 15. Unsafe Task Link Injection
+  await assertFails(
+    updateDoc(doc(dbContrib, 'boards', 'board_1', 'tasks', 'task_1'), {
+      links: [{ label: 'Bad', url: 'javascript:alert(1)', kind: 'other' }],
+      updatedAt: serverTimestamp(),
+    })
+  );
+
+  // Positive assertions: Admin sees all boards; Contributor creates task; Viewer posts task chat; Outsider redeems viewer invite atomically
   await assertSucceeds(getDocs(collection(dbAdmin, 'boards')));
   await assertSucceeds(getDoc(doc(dbAdmin, 'boards', 'board_1')));
   await assertSucceeds(
@@ -283,6 +335,20 @@ async function runTests() {
       tags: ['team'],
       dueDate: '',
       completed: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(
+    setDoc(doc(dbViewer, 'boards', 'board_1', 'messages', 'msg_ok1'), {
+      id: 'msg_ok1',
+      boardId: 'board_1',
+      taskId: 'task_1',
+      taskTitle: 'Existing Task',
+      ownerId: CREATOR.uid,
+      senderId: MEMBER_VIEWER.uid,
+      senderName: 'Viewer',
+      text: 'Looks good to me!',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     })

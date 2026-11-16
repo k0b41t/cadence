@@ -218,6 +218,12 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
+        "ownerDisplayName": {
+          "type": "string",
+          "description": "Optional display name of the board creator.",
+          "minLength": 1,
+          "maxLength": 80
+        },
         "title": {
           "type": "string",
           "description": "Display title of the Kanban board.",
@@ -565,6 +571,24 @@
           "type": "boolean",
           "description": "Whether the task is marked complete."
         },
+        "placedOnColumnAt": {
+          "type": "string",
+          "description": "Optional YYYY-MM-DD date when the task was placed on its current column.",
+          "maxLength": 32
+        },
+        "completedAt": {
+          "type": "string",
+          "description": "Optional YYYY-MM-DD date when the task was completed or empty string.",
+          "maxLength": 32
+        },
+        "links": {
+          "type": "array",
+          "description": "Up to 8 attached file or repository URL link objects."
+        },
+        "milestones": {
+          "type": "array",
+          "description": "Up to 8 important date milestone objects attached to the task."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -658,6 +682,77 @@
         }
       },
       "required": ["id", "boardId", "taskId", "ownerId", "title", "completed", "position", "createdAt", "updatedAt"]
+    },
+    "TaskMessage": {
+      "title": "TaskMessage",
+      "description": "A persistent chat log message attached to a Kanban task.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Message document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "boardId": {
+          "type": "string",
+          "description": "Parent board ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "taskId": {
+          "type": "string",
+          "description": "Attached task ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "taskTitle": {
+          "type": "string",
+          "description": "Task title label at send time.",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the parent board creator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "senderId": {
+          "type": "string",
+          "description": "UID of the user who sent the message.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "senderName": {
+          "type": "string",
+          "description": "Display name of the sender.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "text": {
+          "type": "string",
+          "description": "Chat message body.",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["id", "boardId", "taskId", "taskTitle", "ownerId", "senderId", "senderName", "text", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -704,6 +799,10 @@
     "/boards/{boardId}/tasks/{taskId}/subtasks/{subtaskId}": {
       "schema": { "$ref": "#/entities/Subtask" },
       "description": "Checklist subtasks belonging to a Kanban task."
+    },
+    "/boards/{boardId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/TaskMessage" },
+      "description": "Task chat log messages belonging to a Kanban board and linked to a task."
     }
   }
 }

@@ -23,10 +23,30 @@ export const LIMITS = {
   TASK_TAGS_MAX: 5,
   TASK_TAG_LENGTH_MAX: 24,
   TASK_DUE_DATE_MAX: 32,
+  TASK_LINKS_MAX: 8,
+  TASK_LINK_LABEL_MAX: 60,
+  TASK_LINK_URL_MAX: 500,
+  TASK_MILESTONES_MAX: 8,
+  TASK_MILESTONE_TITLE_MAX: 60,
   SUBTASK_TITLE_MAX: 140,
+  MESSAGE_TEXT_MAX: 1000,
   INVITE_LABEL_MAX: 60,
   POSITION_MAX: 1000000,
 } as const;
+
+export type TaskLinkKind = 'repo' | 'file' | 'doc' | 'other';
+
+export interface TaskLink {
+  label: string;
+  url: string;
+  kind: TaskLinkKind;
+}
+
+export interface TaskMilestone {
+  id: string;
+  title: string;
+  date: string;
+}
 
 export interface BoardPermissions {
   canView: boolean;
@@ -117,6 +137,7 @@ export interface BoardRef {
 export interface Board {
   id: string;
   ownerId: string;
+  ownerDisplayName?: string;
   title: string;
   description: string;
   status: BoardStatus;
@@ -182,6 +203,10 @@ export interface Task {
   tags: string[];
   dueDate: string;
   completed: boolean;
+  placedOnColumnAt?: string;
+  completedAt?: string;
+  links?: TaskLink[];
+  milestones?: TaskMilestone[];
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }
@@ -195,6 +220,19 @@ export interface Subtask {
   title: string;
   completed: boolean;
   position: number;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface TaskMessage {
+  id: string;
+  boardId: string;
+  taskId: string;
+  taskTitle: string;
+  ownerId: string;
+  senderId: string;
+  senderName: string;
+  text: string;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }

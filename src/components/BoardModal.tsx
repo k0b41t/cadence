@@ -10,6 +10,7 @@ import { BOARD_TEMPLATES, LIMITS, type Board, type BoardTemplate } from '../type
 
 interface BoardModalProps {
   uid: string;
+  ownerDisplayName?: string;
   mode: 'create' | 'edit';
   board?: Board;
   isAdmin: boolean;
@@ -20,6 +21,7 @@ interface BoardModalProps {
 
 export function BoardModal({
   uid,
+  ownerDisplayName,
   mode,
   board,
   isAdmin,
@@ -56,7 +58,7 @@ export function BoardModal({
 
     try {
       if (mode === 'create') {
-        const newId = await createBoard(uid, title, description, template, false);
+        const newId = await createBoard(uid, title, description, template, false, ownerDisplayName);
         onCreated(newId);
         onClose();
       } else if (board) {

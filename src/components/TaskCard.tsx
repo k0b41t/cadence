@@ -1,11 +1,12 @@
 import type { DragEvent } from 'react';
-import { Check, Circle } from 'lucide-react';
+import { Check, Circle, Flag, Link2, MessageSquare } from 'lucide-react';
 import type { Priority, Task } from '../types/kanban';
 
 interface TaskCardProps {
   task: Task;
   canEdit: boolean;
   assigneeName?: string;
+  messageCount?: number;
   isDragging: boolean;
   onDragStart: (e: DragEvent<HTMLDivElement>, task: Task) => void;
   onDragEnd: () => void;
@@ -46,6 +47,7 @@ export function TaskCard({
   task,
   canEdit,
   assigneeName,
+  messageCount = 0,
   isDragging,
   onDragStart,
   onDragEnd,
@@ -54,6 +56,8 @@ export function TaskCard({
 }: TaskCardProps) {
   const priorityInfo = PRIORITY_META[task.priority] ?? PRIORITY_META.medium;
   const due = formatDueDate(task.dueDate);
+  const linkCount = task.links?.length ?? 0;
+  const milestoneCount = task.milestones?.length ?? 0;
 
   return (
     <div
@@ -150,6 +154,42 @@ export function TaskCard({
                 <span aria-hidden="true">·</span>
                 <span className="truncate max-w-[150px] text-slate-500 dark:text-slate-400">
                   {task.tags.join(' / ')}
+                </span>
+              </>
+            )}
+
+            {linkCount > 0 && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span
+                  title={`${linkCount} linked file/repo URL${linkCount === 1 ? '' : 's'}`}
+                  className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300"
+                >
+                  <Link2 className="w-3 h-3" />
+                  <span>{linkCount}</span>
+                </span>
+              </>
+            )}
+
+            {milestoneCount > 0 && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span
+                  title={`${milestoneCount} important date${milestoneCount === 1 ? '' : 's'}`}
+                  className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300"
+                >
+                  <Flag className="w-3 h-3" />
+                  <span>{milestoneCount}</span>
+                </span>
+              </>
+            )}
+
+            {messageCount > 0 && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300">
+                  <MessageSquare className="w-3 h-3" />
+                  <span>{messageCount}</span>
                 </span>
               </>
             )}

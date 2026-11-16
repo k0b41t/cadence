@@ -78,6 +78,13 @@ service cloud.firestore {
       return isAdmin() || isBoardOwner(boardId) || isBoardMember(boardId);
     }
 
+    function isValidAssignee(boardId, assigneeId) {
+      return assigneeId == ''
+        || assigneeId == getBoard(boardId).data.ownerId
+        || memberExists(boardId, assigneeId)
+        || exists(/databases/$(database)/documents/admins/$(assigneeId));
+    }
+
     function canCreateTasksOnBoard(boardId) {
       return isAdmin()
         || isBoardOwner(boardId)
@@ -162,6 +169,7 @@ service cloud.firestore {
     function isValidBoard(data, boardId) {
       return data.id is string && data.id == boardId && isValidId(data.id)
         && data.ownerId is string && isValidId(data.ownerId)
+        && (!('ownerDisplayName' in data) || (data.ownerDisplayName is string && data.ownerDisplayName.size() >= 1 && data.ownerDisplayName.size() <= 80))
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 80
         && data.description is string && data.description.size() <= 300
         && data.status in ['active', 'archived']
@@ -219,6 +227,41 @@ service cloud.firestore {
         && (tags.size() == 0 || (tags[0] is string && tags[0].size() >= 1 && tags[0].size() <= 24));
     }
 
+    function isValidDateString(val) {
+      return val is string && val.size() <= 32 && val.matches('^(\\d{4}-\\d{2}-\\d{2})?$');
+    }
+
+    function isValidTaskLinkItem(item) {
+      return item is map
+        && item.keys().hasAll(['label', 'url', 'kind'])
+        && item.keys().hasOnly(['label', 'url', 'kind'])
+        && item.label is string && item.label.size() >= 1 && item.label.size() <= 60
+        && item.url is string && item.url.size() >= 8 && item.url.size() <= 500
+        && item.url.matches('^https?://[^\\s]+$')
+        && item.kind in ['repo', 'file', 'doc', 'other'];
+    }
+
+    function isValidTaskLinks(links) {
+      return links is list
+        && links.size() <= 8
+        && (links.size() == 0 || isValidTaskLinkItem(links[0]));
+    }
+
+    function isValidTaskMilestoneItem(item) {
+      return item is map
+        && item.keys().hasAll(['id', 'title', 'date'])
+        && item.keys().hasOnly(['id', 'title', 'date'])
+        && item.id is string && isValidId(item.id)
+        && item.title is string && item.title.size() >= 1 && item.title.size() <= 60
+        && item.date is string && item.date.size() == 10 && item.date.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    function isValidTaskMilestones(milestones) {
+      return milestones is list
+        && milestones.size() <= 8
+        && (milestones.size() == 0 || isValidTaskMilestoneItem(milestones[0]));
+    }
+
     function isValidTask(data, boardId, taskId) {
       return data.id is string && data.id == taskId && isValidId(data.id)
         && data.boardId is string && data.boardId == boardId && isValidId(data.boardId)
@@ -231,8 +274,12 @@ service cloud.firestore {
         && data.priority in ['low', 'medium', 'high', 'urgent']
         && data.position is number && data.position >= 0 && data.position <= 1000000
         && isValidTags(data.tags)
-        && data.dueDate is string && data.dueDate.size() <= 32
+        && isValidDateString(data.dueDate)
         && data.completed is bool
+        && (!('placedOnColumnAt' in data) || isValidDateString(data.placedOnColumnAt))
+        && (!('completedAt' in data) || isValidDateString(data.completedAt))
+        && (!('links' in data) || isValidTaskLinks(data.links))
+        && (!('milestones' in data) || isValidTaskMilestones(data.milestones))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -246,6 +293,19 @@ service cloud.firestore {
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 140
         && data.completed is bool
         && data.position is number && data.position >= 0 && data.position <= 1000000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTaskMessage(data, boardId, messageId) {
+      return data.id is string && data.id == messageId && isValidId(data.id)
+        && data.boardId is string && data.boardId == boardId && isValidId(data.boardId)
+        && data.taskId is string && isValidId(data.taskId)
+        && data.taskTitle is string && data.taskTitle.size() >= 1 && data.taskTitle.size() <= 140
+        && data.ownerId is string && isValidId(data.ownerId)
+        && data.senderId is string && isValidId(data.senderId)
+        && data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 1000
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -416,7 +476,7 @@ service cloud.firestore {
       allow create: if isVerifiedUser()
         && isValidId(boardId)
         && incoming().keys().hasAll(['id', 'ownerId', 'title', 'description', 'status', 'createdAt', 'updatedAt'])
-        && incoming().keys().hasOnly(['id', 'ownerId', 'title', 'description', 'status', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['id', 'ownerId', 'ownerDisplayName', 'title', 'description', 'status', 'createdAt', 'updatedAt'])
         && isValidBoard(incoming(), boardId)
         && incoming().ownerId == request.auth.uid
         && incoming().status == 'active'
@@ -434,10 +494,11 @@ service cloud.firestore {
           isAdmin() ||
           (
             existing().status != 'archived'
-            && (existing().ownerId == request.auth.uid || isBoardMember(boardId))
+            && existing().ownerId == request.auth.uid
             && (
-              (existing().ownerId == request.auth.uid && incoming().status == 'archived' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
-              (existing().ownerId == request.auth.uid && incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'updatedAt']))
+              (incoming().status == 'archived' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+              (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'updatedAt'])) ||
+              (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['ownerDisplayName', 'updatedAt']))
             )
           )
         );
@@ -604,7 +665,7 @@ service cloud.firestore {
           && isValidId(boardId)
           && isValidId(taskId)
           && incoming().keys().hasAll(['id', 'boardId', 'columnId', 'ownerId', 'createdBy', 'assigneeId', 'title', 'description', 'priority', 'position', 'tags', 'dueDate', 'completed', 'createdAt', 'updatedAt'])
-          && incoming().keys().hasOnly(['id', 'boardId', 'columnId', 'ownerId', 'createdBy', 'assigneeId', 'title', 'description', 'priority', 'position', 'tags', 'dueDate', 'completed', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'boardId', 'columnId', 'ownerId', 'createdBy', 'assigneeId', 'title', 'description', 'priority', 'position', 'tags', 'dueDate', 'completed', 'placedOnColumnAt', 'completedAt', 'links', 'milestones', 'createdAt', 'updatedAt'])
           && isValidTask(incoming(), boardId, taskId)
           && incoming().createdBy == request.auth.uid
           && incoming().createdAt == request.time
@@ -612,6 +673,7 @@ service cloud.firestore {
           && boardExists(boardId)
           && incoming().ownerId == getBoard(boardId).data.ownerId
           && exists(/databases/$(database)/documents/boards/$(boardId)/columns/$(incoming().columnId))
+          && isValidAssignee(boardId, incoming().assigneeId)
           && (isAdmin() || (isBoardActive(boardId) && canCreateTasksOnBoard(boardId)));
 
         allow update: if isVerifiedUser()
@@ -625,11 +687,20 @@ service cloud.firestore {
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && exists(/databases/$(database)/documents/boards/$(boardId)/columns/$(incoming().columnId))
+          && (
+            !('assigneeId' in incoming())
+            || incoming().assigneeId == ''
+            || (('assigneeId' in existing()) && incoming().assigneeId == existing().assigneeId)
+            || isValidAssignee(boardId, incoming().assigneeId)
+          )
           && (isAdmin() || (isBoardActive(boardId) && canEditTasksOnBoard(boardId)))
           && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['columnId', 'position', 'placedOnColumnAt', 'updatedAt']) ||
             incoming().diff(existing()).affectedKeys().hasOnly(['columnId', 'position', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'completedAt', 'placedOnColumnAt', 'assigneeId', 'links', 'milestones', 'updatedAt']) ||
             incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'assigneeId', 'updatedAt']) ||
             incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'completedAt', 'updatedAt']) ||
             incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'updatedAt'])
           );
 
@@ -689,6 +760,39 @@ service cloud.firestore {
             && isValidId(subtaskId)
             && (isAdmin() || (isBoardActive(boardId) && canDeleteTasksOnBoard(boardId)));
         }
+      }
+
+      // -----------------------------------------------------------------------
+      // Task Chat Log Messages Subcollection
+      // -----------------------------------------------------------------------
+      match /messages/{messageId} {
+        allow get: if isSignedIn() && isValidId(boardId) && isValidId(messageId) && canAccessBoard(boardId);
+        allow list: if isSignedIn() && (
+          isBootstrapAdmin() ||
+          resource.data.ownerId == request.auth.uid ||
+          canAccessBoard(boardId)
+        );
+
+        allow create: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(messageId)
+          && incoming().keys().hasAll(['id', 'boardId', 'taskId', 'taskTitle', 'ownerId', 'senderId', 'senderName', 'text', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'boardId', 'taskId', 'taskTitle', 'ownerId', 'senderId', 'senderName', 'text', 'createdAt', 'updatedAt'])
+          && isValidTaskMessage(incoming(), boardId, messageId)
+          && incoming().senderId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && boardExists(boardId)
+          && incoming().ownerId == getBoard(boardId).data.ownerId
+          && exists(/databases/$(database)/documents/boards/$(boardId)/tasks/$(incoming().taskId))
+          && (isAdmin() || (isBoardActive(boardId) && canAccessBoard(boardId)));
+
+        allow update: if false;
+
+        allow delete: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(messageId)
+          && (isAdmin() || (isBoardActive(boardId) && (isBoardOwner(boardId) || existing().senderId == request.auth.uid)));
       }
     }
   }
