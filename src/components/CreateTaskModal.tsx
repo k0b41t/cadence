@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, FileText, Flag, GitBranch, Link2, Plus, Trash2, X } from 'lucide-react';
+import { Bell, BellOff, BookOpen, FileText, Flag, GitBranch, Link2, Plus, Trash2, X } from 'lucide-react';
 import {
   createTask,
   generateId,
@@ -60,6 +60,7 @@ export function CreateTaskModal({
   const [milestones, setMilestones] = useState<TaskMilestone[]>([]);
   const [milestoneTitle, setMilestoneTitle] = useState('');
   const [milestoneDate, setMilestoneDate] = useState('');
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
 
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -149,6 +150,7 @@ export function CreateTaskModal({
         placedOnColumnAt,
         links: finalLinks,
         milestones: finalMilestones,
+        notificationsEnabled,
       });
       onClose();
     } catch (err) {
@@ -498,6 +500,32 @@ export function CreateTaskModal({
                 </button>
               </div>
             )}
+          </div>
+
+          {/* Task Notifications Toggle */}
+          <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                Due Date &amp; Milestone Notifications
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Include this task in top-bar upcoming deadline and milestone reminders.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={notificationsEnabled}
+              onClick={() => setNotificationsEnabled((v) => !v)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                notificationsEnabled
+                  ? 'border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300'
+                  : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+              }`}
+            >
+              {notificationsEnabled ? <Bell className="w-3.5 h-3.5" /> : <BellOff className="w-3.5 h-3.5" />}
+              <span>{notificationsEnabled ? 'On' : 'Off'}</span>
+            </button>
           </div>
 
           <div className="flex items-center justify-end gap-2.5 pt-2">

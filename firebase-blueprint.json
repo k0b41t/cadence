@@ -479,6 +479,10 @@
           "type": "number",
           "description": "Optional work-in-progress card limit (0 means unlimited)."
         },
+        "colorRules": {
+          "type": "array",
+          "description": "Up to 6 task-count threshold background color rules."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -588,6 +592,10 @@
         "milestones": {
           "type": "array",
           "description": "Up to 8 important date milestone objects attached to the task."
+        },
+        "notificationsEnabled": {
+          "type": "boolean",
+          "description": "Whether due-date and milestone notifications are enabled for this task."
         },
         "createdAt": {
           "type": "string",

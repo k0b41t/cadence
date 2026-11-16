@@ -317,6 +317,16 @@ async function runTests() {
     })
   );
 
+  // 16. Column Color Rule Poisoning
+  await assertFails(
+    updateDoc(doc(dbCreator, 'boards', 'board_1', 'columns', 'col_1'), {
+      title: 'To Do',
+      wipLimit: 0,
+      colorRules: [{ threshold: -1, color: 'javascript:alert(1)' }],
+      updatedAt: serverTimestamp(),
+    })
+  );
+
   // Positive assertions: Admin sees all boards; Contributor creates task; Viewer posts task chat; Outsider redeems viewer invite atomically
   await assertSucceeds(getDocs(collection(dbAdmin, 'boards')));
   await assertSucceeds(getDoc(doc(dbAdmin, 'boards', 'board_1')));

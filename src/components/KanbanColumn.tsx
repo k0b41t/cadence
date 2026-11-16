@@ -1,6 +1,6 @@
 import { useState, type DragEvent } from 'react';
 import { Plus, Settings2 } from 'lucide-react';
-import { LIMITS, type Column, type Task } from '../types/kanban';
+import { LIMITS, type Column, type ColumnBgColor, type Task } from '../types/kanban';
 import { TaskCard } from './TaskCard';
 
 interface KanbanColumnProps {
@@ -22,6 +22,33 @@ interface KanbanColumnProps {
   onQuickCreateTask: (columnId: string, title: string) => Promise<void>;
   onOpenColumnSettings: (column: Column) => void;
 }
+
+const COLUMN_BG_MAP: Record<ColumnBgColor, { bg: string; border: string }> = {
+  amber: {
+    bg: 'bg-amber-50/90 dark:bg-amber-950/35',
+    border: 'border-amber-300/90 dark:border-amber-800/70',
+  },
+  red: {
+    bg: 'bg-red-50/90 dark:bg-red-950/35',
+    border: 'border-red-300/90 dark:border-red-800/70',
+  },
+  emerald: {
+    bg: 'bg-emerald-50/90 dark:bg-emerald-950/30',
+    border: 'border-emerald-300/80 dark:border-emerald-800/70',
+  },
+  blue: {
+    bg: 'bg-blue-50/90 dark:bg-blue-950/30',
+    border: 'border-blue-300/80 dark:border-blue-800/70',
+  },
+  violet: {
+    bg: 'bg-violet-50/90 dark:bg-violet-950/30',
+    border: 'border-violet-300/80 dark:border-violet-800/70',
+  },
+  slate: {
+    bg: 'bg-slate-200/80 dark:bg-slate-800/70',
+    border: 'border-slate-300 dark:border-slate-700',
+  },
+};
 
 export function KanbanColumn({
   column,
@@ -48,6 +75,11 @@ export function KanbanColumn({
 
   const isOverWip = column.wipLimit > 0 && tasks.length > column.wipLimit;
   const isAtWip = column.wipLimit > 0 && tasks.length === column.wipLimit;
+
+  const activeColorRule = (column.colorRules ?? [])
+    .filter((r) => tasks.length >= r.threshold)
+    .sort((a, b) => b.threshold - a.threshold)[0];
+  const colorStyles = activeColorRule ? COLUMN_BG_MAP[activeColorRule.color] : null;
 
   const handleSubmitQuickAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,10 +112,14 @@ export function KanbanColumn({
           dropTarget && dropTarget.columnId === column.id ? dropTarget.index : tasks.length;
         onDropOnColumn(e, column.id, targetIndex);
       }}
-      className={`w-[320px] shrink-0 flex flex-col max-h-full bg-slate-100/80 dark:bg-slate-900/50 border rounded-xl transition-colors ${
+      className={`w-[320px] shrink-0 flex flex-col max-h-full border rounded-xl transition-colors ${
+        colorStyles ? colorStyles.bg : 'bg-slate-100/80 dark:bg-slate-900/50'
+      } ${
         dropTarget?.columnId === column.id
           ? 'border-blue-500/70 dark:border-blue-500/60'
-          : 'border-slate-200/90 dark:border-slate-800'
+          : colorStyles
+            ? colorStyles.border
+            : 'border-slate-200/90 dark:border-slate-800'
       }`}
     >
       {/* Column Header */}

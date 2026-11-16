@@ -29,6 +29,8 @@ import {
   type BoardRole,
   type BoardTemplate,
   type Column,
+  type ColumnBgColor,
+  type ColumnColorRule,
   type Priority,
   type Subtask,
   type Task,
@@ -149,6 +151,23 @@ function sanitizeTaskMilestones(milestones: TaskMilestone[] | undefined): TaskMi
   }
   cleaned.sort((a, b) => a.date.localeCompare(b.date));
   return cleaned;
+}
+
+const VALID_COL_COLORS: ColumnBgColor[] = ['slate', 'amber', 'red', 'emerald', 'blue', 'violet'];
+
+export function sanitizeColumnColorRules(rules: ColumnColorRule[] | undefined): ColumnColorRule[] {
+  if (!rules || rules.length === 0) return [];
+  const byThreshold = new Map<number, ColumnBgColor>();
+  for (const item of rules) {
+    if (!Number.isFinite(item.threshold)) continue;
+    const threshold = Math.max(1, Math.min(LIMITS.COLUMN_WIP_MAX, Math.floor(item.threshold)));
+    const color: ColumnBgColor = VALID_COL_COLORS.includes(item.color) ? item.color : 'amber';
+    byThreshold.set(threshold, color);
+  }
+  return Array.from(byThreshold.entries())
+    .map(([threshold, color]) => ({ threshold, color }))
+    .sort((a, b) => a.threshold - b.threshold)
+    .slice(0, LIMITS.COLUMN_COLOR_RULES_MAX);
 }
 
 function sanitizeText(value: string, maxLength: number): string {
@@ -544,6 +563,51 @@ export function subscribeTasks(boardId: string, onData: (tasks: Task[]) => void)
   );
 }
 
+export function subscribeAllBoardsTasks(
+  boards: Board[],
+  onData: (tasks: Task[]) => void
+): Unsubscribe {
+  if (boards.length === 0) {
+    onData([]);
+    return () => {};
+  }
+
+  const byBoard = new Map<string, Task[]>();
+  const emit = () => {
+    const merged: Task[] = [];
+    for (const list of byBoard.values()) {
+      merged.push(...list);
+    }
+    onData(merged);
+  };
+
+  const unsubs = boards.map((board) => {
+    const path = `boards/${board.id}/tasks`;
+    return onSnapshot(
+      collection(db, 'boards', board.id, 'tasks'),
+      (snapshot) => {
+        byBoard.set(
+          board.id,
+          snapshot.docs.map((d) => d.data() as Task)
+        );
+        emit();
+      },
+      (error) => {
+        if (error instanceof Error && error.message.includes('permission')) {
+          byBoard.delete(board.id);
+          emit();
+          return;
+        }
+        handleFirestoreError(error, OperationType.LIST, path);
+      }
+    );
+  });
+
+  return () => {
+    unsubs.forEach((u) => u());
+  };
+}
+
 export function subscribeSubtasks(
   boardId: string,
   taskId: string,
@@ -727,7 +791,7 @@ export async function createBoard(
   colNames.forEach((colTitle, index) => {
     const colId = generateId('col');
     colIds.push(colId);
-    colBatch.set(doc(db, 'boards', boardId, 'columns', colId), {
+    const colPayload: Record<string, unknown> = {
       id: colId,
       boardId,
       ownerId: uid,
@@ -737,7 +801,14 @@ export async function createBoard(
       wipLimit: colTitle === 'In Progress' ? 4 : 0,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
-    });
+    };
+    if (colTitle === 'In Progress') {
+      colPayload.colorRules = [
+        { threshold: 3, color: 'amber' },
+        { threshold: 4, color: 'red' },
+      ];
+    }
+    colBatch.set(doc(db, 'boards', boardId, 'columns', colId), colPayload);
   });
 
   try {
@@ -871,6 +942,7 @@ export async function createBoard(
         completedAt: t.completedAt,
         links: t.links,
         milestones: t.milestones,
+        notificationsEnabled: true,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -1005,13 +1077,15 @@ export async function createColumn(
   board: Board,
   title: string,
   position: number,
-  wipLimit = 0
+  wipLimit = 0,
+  colorRules: ColumnColorRule[] = []
 ): Promise<string> {
   assertValidId(actorUid, 'userId');
   assertValidId(board.id, 'boardId');
   const cleanTitle = sanitizeText(title, LIMITS.COLUMN_TITLE_MAX);
   if (!cleanTitle) throw new Error('Column title cannot be empty.');
   const cleanWip = Math.max(0, Math.min(LIMITS.COLUMN_WIP_MAX, Math.floor(wipLimit)));
+  const cleanRules = sanitizeColumnColorRules(colorRules);
 
   const columnId = generateId('col');
   const path = `boards/${board.id}/columns/${columnId}`;
@@ -1024,6 +1098,7 @@ export async function createColumn(
       title: cleanTitle,
       position: clampPosition(position),
       wipLimit: cleanWip,
+      colorRules: cleanRules,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -1037,19 +1112,22 @@ export async function updateColumnDetails(
   boardId: string,
   columnId: string,
   title: string,
-  wipLimit: number
+  wipLimit: number,
+  colorRules: ColumnColorRule[] = []
 ): Promise<void> {
   assertValidId(boardId, 'boardId');
   assertValidId(columnId, 'columnId');
   const cleanTitle = sanitizeText(title, LIMITS.COLUMN_TITLE_MAX);
   if (!cleanTitle) throw new Error('Column title cannot be empty.');
   const cleanWip = Math.max(0, Math.min(LIMITS.COLUMN_WIP_MAX, Math.floor(wipLimit)));
+  const cleanRules = sanitizeColumnColorRules(colorRules);
 
   const path = `boards/${boardId}/columns/${columnId}`;
   try {
     await updateDoc(doc(db, 'boards', boardId, 'columns', columnId), {
       title: cleanTitle,
       wipLimit: cleanWip,
+      colorRules: cleanRules,
       updatedAt: serverTimestamp(),
     });
   } catch (error) {
@@ -1131,6 +1209,7 @@ export async function createTask(
     placedOnColumnAt?: string;
     links?: TaskLink[];
     milestones?: TaskMilestone[];
+    notificationsEnabled?: boolean;
   }
 ): Promise<string> {
   assertValidId(actorUid, 'userId');
@@ -1165,6 +1244,7 @@ export async function createTask(
       completedAt: '',
       links: sanitizeTaskLinks(input.links),
       milestones: sanitizeTaskMilestones(input.milestones),
+      notificationsEnabled: input.notificationsEnabled ?? true,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -1216,6 +1296,7 @@ export async function updateTaskDetails(
     assigneeId: string;
     links?: TaskLink[];
     milestones?: TaskMilestone[];
+    notificationsEnabled?: boolean;
   }
 ): Promise<void> {
   assertValidId(boardId, 'boardId');
@@ -1245,6 +1326,7 @@ export async function updateTaskDetails(
       assigneeId: input.assigneeId,
       links: sanitizeTaskLinks(input.links),
       milestones: sanitizeTaskMilestones(input.milestones),
+      notificationsEnabled: input.notificationsEnabled ?? true,
       updatedAt: serverTimestamp(),
     });
   } catch (error) {
@@ -1265,6 +1347,25 @@ export async function toggleTaskCompleted(
     await updateDoc(doc(db, 'boards', boardId, 'tasks', taskId), {
       completed,
       completedAt: completed ? getTodayDateKey() : '',
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function toggleTaskNotifications(
+  boardId: string,
+  taskId: string,
+  notificationsEnabled: boolean
+): Promise<void> {
+  assertValidId(boardId, 'boardId');
+  assertValidId(taskId, 'taskId');
+
+  const path = `boards/${boardId}/tasks/${taskId}`;
+  try {
+    await updateDoc(doc(db, 'boards', boardId, 'tasks', taskId), {
+      notificationsEnabled,
       updatedAt: serverTimestamp(),
     });
   } catch (error) {

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Bell,
+  BellOff,
   BookOpen,
   Check,
   Circle,
@@ -84,6 +86,9 @@ export function TaskDetailModal({
   const [completedAt, setCompletedAt] = useState(task.completedAt ?? '');
   const [columnId, setColumnId] = useState(task.columnId);
   const [assigneeId, setAssigneeId] = useState(task.assigneeId ?? '');
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    task.notificationsEnabled !== false
+  );
   const [tags, setTags] = useState<string[]>(task.tags);
   const [tagInput, setTagInput] = useState('');
 
@@ -126,6 +131,7 @@ export function TaskDetailModal({
     setCompletedAt(task.completedAt ?? '');
     setColumnId(task.columnId);
     setAssigneeId(task.assigneeId ?? '');
+    setNotificationsEnabled(task.notificationsEnabled !== false);
     setTags(task.tags);
     setLinks(task.links ?? []);
     setMilestones(task.milestones ?? []);
@@ -248,6 +254,7 @@ export function TaskDetailModal({
         completedAt,
         placedOnColumnAt,
         assigneeId,
+        notificationsEnabled,
         links: finalLinks,
         milestones: finalMilestones,
       });
@@ -306,7 +313,7 @@ export function TaskDetailModal({
         className="w-full max-w-2xl max-h-[90vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl flex flex-col overflow-hidden"
       >
         <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-4 shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex flex-wrap items-center gap-2.5 min-w-0">
             <button
               type="button"
               disabled={!canEditTasks}
@@ -323,6 +330,30 @@ export function TaskDetailModal({
             >
               {completed ? <Check className="w-3.5 h-3.5" /> : <Circle className="w-3.5 h-3.5" />}
               <span>{completed ? 'Completed' : 'Mark complete'}</span>
+            </button>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={notificationsEnabled}
+              disabled={!canEditTasks}
+              onClick={() => setNotificationsEnabled((prev) => !prev)}
+              title={
+                notificationsEnabled
+                  ? 'Notifications enabled for due dates and milestones'
+                  : 'Notifications muted for this task'
+              }
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                notificationsEnabled
+                  ? 'border-amber-200 dark:border-amber-800/80 bg-amber-50/70 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300'
+                  : 'border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+              } disabled:opacity-60`}
+            >
+              {notificationsEnabled ? (
+                <Bell className="w-3.5 h-3.5" />
+              ) : (
+                <BellOff className="w-3.5 h-3.5" />
+              )}
+              <span>{notificationsEnabled ? 'Notifications On' : 'Notifications Off'}</span>
             </button>
             <h2 id="task-modal-heading" className="text-sm font-semibold text-slate-500 dark:text-slate-400 truncate">
               Task Details

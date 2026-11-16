@@ -17,6 +17,7 @@
 9. **Terminal State Locking**: Archived boards (`status == 'archived'`) block all non-admin updates to the board and all non-admin writes to columns, tasks, subtasks, messages, and invites.
 10. **Temporal Integrity & Immutability**: `createdAt == request.time` on create, immutable on update; `updatedAt == request.time` on create and update; `createdBy == request.auth.uid` on new task/column/subtask/invite creation.
 11. **Task Link & Milestone Integrity**: Task `links` are bounded to 8 items with `http(s)://` URLs (blocking `javascript:`/`data:` schemes), and `milestones`/`placedOnColumnAt`/`completedAt` enforce bounded `YYYY-MM-DD` dates and max 8 milestones.
+12. **Column Threshold Color & Notification Toggle Integrity**: Column `colorRules` are bounded to 6 rules with integer thresholds (`1..100`) and a strict color allowlist (`slate`, `amber`, `red`, `emerald`, `blue`, `violet`), and `Task.notificationsEnabled` is strictly boolean.
 
 ## 2. The "Dirty Dozen" Adversarial Payloads
 
@@ -35,3 +36,5 @@
 13. **Outsider Assignee Injection**: Board contributor attempts to assign a task to an outsider UID who is not allowed on the board. -> `PERMISSION_DENIED`
 14. **Chat Sender Spoofing & Outsider Chat Post**: Non-member attempts to post to `/boards/board_1/messages`, or member attempts to post with `senderId != request.auth.uid`. -> `PERMISSION_DENIED`
 15. **Unsafe Task Link Injection**: Board contributor attempts to attach a `javascript:alert(1)` link to a task. -> `PERMISSION_DENIED`
+16. **Column Color Rule Poisoning**: Board creator or manager attempts to inject an arbitrary color value (`expression(alert(1))`) or negative threshold into `Column.colorRules`. -> `PERMISSION_DENIED`
+

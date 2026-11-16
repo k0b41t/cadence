@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import {
+  Bell,
   CalendarDays,
   Columns3,
   Menu,
@@ -22,6 +23,7 @@ import { CreateTaskModal } from './components/CreateTaskModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { JoinBoardModal } from './components/JoinBoardModal';
 import { KanbanColumn } from './components/KanbanColumn';
+import { buildTaskNotifications, NotificationsModal } from './components/NotificationsModal';
 import { ShareBoardModal } from './components/ShareBoardModal';
 import { Sidebar } from './components/Sidebar';
 import { SignInView } from './components/SignInView';
@@ -32,9 +34,11 @@ import {
   createColumn,
   createTask,
   ensureUserAndStarterWorkspace,
+  getTodayDateKey,
   moveTask,
   subscribeAccessibleBoards,
   subscribeAllBoardsMessages,
+  subscribeAllBoardsTasks,
   subscribeBoardMembers,
   subscribeBoardMessages,
   subscribeColumns,
@@ -86,6 +90,7 @@ function WorkspaceApp() {
   const [members, setMembers] = useState<BoardMember[]>([]);
   const [boardMessages, setBoardMessages] = useState<TaskMessage[]>([]);
   const [allMessages, setAllMessages] = useState<TaskMessage[]>([]);
+  const [allTasks, setAllTasks] = useState<Task[]>([]);
 
   const [theme, setTheme] = useState<ThemeMode>(() => {
     if (typeof window !== 'undefined') {
@@ -109,6 +114,7 @@ function WorkspaceApp() {
   } | null>(null);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [allChatsOpen, setAllChatsOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [joinModalState, setJoinModalState] = useState<{
     boardId?: string;
     inviteId?: string;
@@ -117,7 +123,11 @@ function WorkspaceApp() {
   const [createTaskOpen, setCreateTaskOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskModalFocusChat, setTaskModalFocusChat] = useState(false);
-  const [pendingOpenTask, setPendingOpenTask] = useState<{ boardId: string; taskId: string } | null>(null);
+  const [pendingOpenTask, setPendingOpenTask] = useState<{
+    boardId: string;
+    taskId: string;
+    focusChat: boolean;
+  } | null>(null);
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
 
   // Add column inline composer
@@ -158,6 +168,7 @@ function WorkspaceApp() {
         setMembers([]);
         setBoardMessages([]);
         setAllMessages([]);
+        setAllTasks([]);
         return;
       }
 
@@ -215,14 +226,19 @@ function WorkspaceApp() {
     };
   }, [user, workspaceReady, isBootstrapAdmin]);
 
-  // Subscribe to all task chats across accessible boards for the top-bar All Chats hub
+  // Subscribe to all task chats & tasks across accessible boards for top-bar hubs
   useEffect(() => {
     if (!user || !workspaceReady) {
       setAllMessages([]);
+      setAllTasks([]);
       return;
     }
     const unsubAllMessages = subscribeAllBoardsMessages(boards, setAllMessages);
-    return () => unsubAllMessages();
+    const unsubAllTasks = subscribeAllBoardsTasks(boards, setAllTasks);
+    return () => {
+      unsubAllMessages();
+      unsubAllTasks();
+    };
   }, [user, workspaceReady, boards]);
 
   // Subscribe to columns, tasks, members, and messages for active board
@@ -247,12 +263,12 @@ function WorkspaceApp() {
     };
   }, [user, workspaceReady, activeBoardId]);
 
-  // Resolve cross-board task navigation from All Chats modal
+  // Resolve cross-board task navigation from All Chats / Notifications modal
   useEffect(() => {
     if (!pendingOpenTask) return;
     if (activeBoardId === pendingOpenTask.boardId && tasks.some((t) => t.id === pendingOpenTask.taskId)) {
       setSelectedTaskId(pendingOpenTask.taskId);
-      setTaskModalFocusChat(true);
+      setTaskModalFocusChat(pendingOpenTask.focusChat);
       setPendingOpenTask(null);
     }
   }, [pendingOpenTask, activeBoardId, tasks]);
@@ -414,6 +430,17 @@ function WorkspaceApp() {
 
   const completedCount = useMemo(() => tasks.filter((t) => t.completed).length, [tasks]);
 
+  const boardMap = useMemo(() => {
+    const map = new Map<string, Board>();
+    boards.forEach((b) => map.set(b.id, b));
+    return map;
+  }, [boards]);
+
+  const upcomingNotificationsCount = useMemo(
+    () => buildTaskNotifications(allTasks, boardMap, getTodayDateKey(), 7).length,
+    [allTasks, boardMap]
+  );
+
   const handleToggleTheme = async () => {
     const next: ThemeMode = theme === 'dark' ? 'light' : 'dark';
     setTheme(next);
@@ -438,7 +465,18 @@ function WorkspaceApp() {
       setSelectedTaskId(taskId);
       setTaskModalFocusChat(true);
     } else {
-      setPendingOpenTask({ boardId, taskId });
+      setPendingOpenTask({ boardId, taskId, focusChat: true });
+      await handleSelectBoard(boardId);
+    }
+  };
+
+  const handleOpenTaskFromNotification = async (boardId: string, taskId: string) => {
+    setNotificationsOpen(false);
+    if (activeBoardId === boardId) {
+      setSelectedTaskId(taskId);
+      setTaskModalFocusChat(false);
+    } else {
+      setPendingOpenTask({ boardId, taskId, focusChat: false });
       await handleSelectBoard(boardId);
     }
   };
@@ -642,6 +680,21 @@ function WorkspaceApp() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setNotificationsOpen(true)}
+              aria-label="View due date and milestone notifications"
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                upcomingNotificationsCount > 0
+                  ? 'border-amber-200 dark:border-amber-800/80 bg-amber-50/70 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 hover:bg-amber-100/70 dark:hover:bg-amber-950/50'
+                  : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+              }`}
+            >
+              <Bell className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Notifications</span>
+              {upcomingNotificationsCount > 0 && <span>· {upcomingNotificationsCount}</span>}
+            </button>
+
             <button
               type="button"
               onClick={() => setAllChatsOpen(true)}
@@ -969,6 +1022,19 @@ function WorkspaceApp() {
             }
           }}
           onClose={() => setBoardModalState(null)}
+        />
+      )}
+
+      {notificationsOpen && (
+        <NotificationsModal
+          uid={user.uid}
+          isAdmin={isAdmin}
+          boards={boards}
+          activeBoard={activeBoard}
+          activeBoardCanEdit={effectivePermissions.canEditTasks}
+          allTasks={allTasks}
+          onOpenTask={handleOpenTaskFromNotification}
+          onClose={() => setNotificationsOpen(false)}
         />
       )}
 

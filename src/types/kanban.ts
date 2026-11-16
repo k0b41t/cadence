@@ -18,6 +18,7 @@ export const LIMITS = {
   BOARD_DESC_MAX: 300,
   COLUMN_TITLE_MAX: 50,
   COLUMN_WIP_MAX: 100,
+  COLUMN_COLOR_RULES_MAX: 6,
   TASK_TITLE_MAX: 140,
   TASK_DESC_MAX: 2000,
   TASK_TAGS_MAX: 5,
@@ -46,6 +47,13 @@ export interface TaskMilestone {
   id: string;
   title: string;
   date: string;
+}
+
+export type ColumnBgColor = 'slate' | 'amber' | 'red' | 'emerald' | 'blue' | 'violet';
+
+export interface ColumnColorRule {
+  threshold: number;
+  color: ColumnBgColor;
 }
 
 export interface BoardPermissions {
@@ -185,6 +193,7 @@ export interface Column {
   title: string;
   position: number;
   wipLimit: number;
+  colorRules?: ColumnColorRule[];
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }
@@ -207,6 +216,7 @@ export interface Task {
   completedAt?: string;
   links?: TaskLink[];
   milestones?: TaskMilestone[];
+  notificationsEnabled?: boolean;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }

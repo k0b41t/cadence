@@ -1,5 +1,5 @@
 import type { DragEvent } from 'react';
-import { Check, Circle, Flag, Link2, MessageSquare } from 'lucide-react';
+import { BellOff, Check, Circle, Flag, Link2, MessageSquare } from 'lucide-react';
 import type { Priority, Task } from '../types/kanban';
 
 interface TaskCardProps {
@@ -190,6 +190,18 @@ export function TaskCard({
                 <span className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300">
                   <MessageSquare className="w-3 h-3" />
                   <span>{messageCount}</span>
+                </span>
+              </>
+            )}
+
+            {task.notificationsEnabled === false && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span
+                  title="Task notifications muted"
+                  className="inline-flex items-center gap-1 text-slate-400 dark:text-slate-500"
+                >
+                  <BellOff className="w-3 h-3" />
                 </span>
               </>
             )}
