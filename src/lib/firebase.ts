@@ -3,9 +3,28 @@ import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-const app = initializeApp(firebaseConfig);
+const hasEnvOverride = Boolean(
+  import.meta.env.VITE_FIREBASE_API_KEY && import.meta.env.VITE_FIREBASE_PROJECT_ID
+);
 
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+const resolvedConfig = hasEnvOverride
+  ? {
+      apiKey: import.meta.env.VITE_FIREBASE_API_KEY as string,
+      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN as string,
+      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID as string,
+      storageBucket: (import.meta.env.VITE_FIREBASE_STORAGE_BUCKET as string) || '',
+      messagingSenderId: (import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID as string) || '',
+      appId: import.meta.env.VITE_FIREBASE_APP_ID as string,
+      firestoreDatabaseId: (import.meta.env.VITE_FIREBASE_DATABASE_ID as string) || '(default)',
+    }
+  : firebaseConfig;
+
+const app = initializeApp(resolvedConfig);
+
+export const db =
+  resolvedConfig.firestoreDatabaseId && resolvedConfig.firestoreDatabaseId !== '(default)'
+    ? getFirestore(app, resolvedConfig.firestoreDatabaseId)
+    : getFirestore(app);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
@@ -74,5 +93,5 @@ async function testConnection() {
 
 testConnection();
 
-export const firebaseProjectId = firebaseConfig.projectId;
-export const firestoreDatabaseId = firebaseConfig.firestoreDatabaseId;
+export const firebaseProjectId = resolvedConfig.projectId;
+export const firestoreDatabaseId = resolvedConfig.firestoreDatabaseId;
