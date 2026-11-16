@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { signInWithPopup } from 'firebase/auth';
-import { ArrowRight, CheckSquare, Columns3, Moon, Sun } from 'lucide-react';
+import { ArrowRight, BookOpen, CheckSquare, Columns3, Moon, Sun } from 'lucide-react';
 import { auth, googleProvider } from '../lib/firebase';
 import type { ThemeMode } from '../types/kanban';
+import { DocsModal } from './DocsModal';
 
 interface SignInViewProps {
   theme: ThemeMode;
@@ -12,6 +13,7 @@ interface SignInViewProps {
 export function SignInView({ theme, onToggleTheme }: SignInViewProps) {
   const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [docsOpen, setDocsOpen] = useState(false);
 
   const handleGoogleSignIn = async () => {
     setSigningIn(true);
@@ -44,6 +46,15 @@ export function SignInView({ theme, onToggleTheme }: SignInViewProps) {
           </a>
         </nav>
         <div className="flex items-center gap-3 shrink-0">
+          <button
+            type="button"
+            onClick={() => setDocsOpen(true)}
+            aria-label="Open Cadence build documentation"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            <span>Docs</span>
+          </button>
           <button
             type="button"
             onClick={onToggleTheme}
@@ -203,6 +214,7 @@ export function SignInView({ theme, onToggleTheme }: SignInViewProps) {
           </div>
         </div>
       </main>
+      {docsOpen && <DocsModal onClose={() => setDocsOpen(false)} />}
     </div>
   );
 }

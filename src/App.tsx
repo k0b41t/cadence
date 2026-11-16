@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import {
   Bell,
+  BookOpen,
   CalendarDays,
   Columns3,
   Menu,
@@ -20,6 +21,7 @@ import { BoardModal } from './components/BoardModal';
 import { CalendarTimelineView } from './components/CalendarTimelineView';
 import { ColumnSettingsModal } from './components/ColumnSettingsModal';
 import { CreateTaskModal } from './components/CreateTaskModal';
+import { DocsModal } from './components/DocsModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { JoinBoardModal } from './components/JoinBoardModal';
 import { KanbanColumn } from './components/KanbanColumn';
@@ -120,6 +122,7 @@ function WorkspaceApp() {
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [allChatsOpen, setAllChatsOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [docsOpen, setDocsOpen] = useState(false);
   const [joinModalState, setJoinModalState] = useState<{
     boardId?: string;
     inviteId?: string;
@@ -703,6 +706,16 @@ function WorkspaceApp() {
           <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
+              onClick={() => setDocsOpen(true)}
+              aria-label="Open Cadence build documentation"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Docs</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setNotificationsOpen(true)}
               aria-label="View due date and milestone notifications"
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 tabular-nums ${
@@ -1063,6 +1076,8 @@ function WorkspaceApp() {
           onClose={() => setBoardModalState(null)}
         />
       )}
+
+      {docsOpen && <DocsModal onClose={() => setDocsOpen(false)} />}
 
       {notificationsOpen && (
         <NotificationsModal
