@@ -96,7 +96,15 @@ coverage/
 *.log
 .env*
 !.env.example
-.firebase/`,
+.firebase/
+firebase-applet-config.json`,
+      },
+      {
+        label: 'Untrack an already-committed config file (if GitHub emailed an alert)',
+        language: 'bat',
+        code: `git rm --cached firebase-applet-config.json
+git commit -m "Stop tracking local firebase-applet-config.json"
+git push`,
       },
       {
         label: 'Daily Git save & sync loop',
@@ -115,9 +123,10 @@ git push`,
         ],
       },
       {
-        heading: '2. Why .gitignore Comes First',
+        heading: '2. Why .gitignore Comes First (and Why GitHub Flags Firebase Keys)',
         paragraphs: [
-          'When you run npm install, it downloads tens of thousands of library files into node_modules/. You never upload node_modules/, compiled dist/ files, or local .env.production config to GitHub. Notice .env* ignores all environment files, while !.env.example makes an exception for the safe empty template.',
+          'When you run npm install, it downloads tens of thousands of library files into node_modules/. You never upload node_modules/, compiled dist/ files, local .env.production config, or firebase-applet-config.json to GitHub. Notice .env* ignores all environment files, while !.env.example makes an exception for the safe empty template.',
+          'Important: GitHub Secret Scanning automatically emails an alert whenever ANY file in a repo contains an AIza... Google API key (even though Firebase Web apiKeys are public client identifiers protected by firestore.rules, not private secrets). Ignoring firebase-applet-config.json keeps your AI Studio config out of GitHub cleanly.',
         ],
       },
       {

@@ -1,7 +1,22 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+
+interface FirebaseAppletConfig {
+  apiKey?: string;
+  authDomain?: string;
+  projectId?: string;
+  storageBucket?: string;
+  messagingSenderId?: string;
+  appId?: string;
+  firestoreDatabaseId?: string;
+}
+
+const appletConfigModules = import.meta.glob<{ default?: FirebaseAppletConfig }>(
+  '../../firebase-applet-config.json',
+  { eager: true }
+);
+const fileConfig: FirebaseAppletConfig = Object.values(appletConfigModules)[0]?.default ?? {};
 
 const hasEnvOverride = Boolean(
   import.meta.env.VITE_FIREBASE_API_KEY && import.meta.env.VITE_FIREBASE_PROJECT_ID
@@ -17,7 +32,21 @@ const resolvedConfig = hasEnvOverride
       appId: import.meta.env.VITE_FIREBASE_APP_ID as string,
       firestoreDatabaseId: (import.meta.env.VITE_FIREBASE_DATABASE_ID as string) || '(default)',
     }
-  : firebaseConfig;
+  : {
+      apiKey: fileConfig.apiKey || '',
+      authDomain: fileConfig.authDomain || '',
+      projectId: fileConfig.projectId || '',
+      storageBucket: fileConfig.storageBucket || '',
+      messagingSenderId: fileConfig.messagingSenderId || '',
+      appId: fileConfig.appId || '',
+      firestoreDatabaseId: fileConfig.firestoreDatabaseId || '(default)',
+    };
+
+if (!resolvedConfig.apiKey || !resolvedConfig.projectId) {
+  console.error(
+    'Missing Firebase configuration. Add VITE_FIREBASE_* variables to .env.production (or .env.local).'
+  );
+}
 
 const app = initializeApp(resolvedConfig);
 
