@@ -36,6 +36,12 @@ import { TaskDetailModal } from './components/TaskDetailModal';
 import { ThemeSettingsModal } from './components/ThemeSettingsModal';
 import { auth } from './lib/firebase';
 import {
+  applyFontsToDocument,
+  loadStoredFonts,
+  saveStoredFonts,
+  type FontPreferences,
+} from './lib/themeFonts';
+import {
   applyPaletteToDocument,
   loadStoredPalettes,
   saveStoredPalettes,
@@ -140,6 +146,7 @@ function WorkspaceApp() {
     return 'light';
   });
   const [palettes, setPalettes] = useState<AppColorPalettes>(() => loadStoredPalettes());
+  const [fonts, setFonts] = useState<FontPreferences>(() => loadStoredFonts());
   const [themeSettingsOpen, setThemeSettingsOpen] = useState(false);
 
   // Filters, search & view mode
@@ -182,7 +189,7 @@ function WorkspaceApp() {
   const [draggedTask, setDraggedTask] = useState<Task | null>(null);
   const [dropTarget, setDropTarget] = useState<{ columnId: string; index: number } | null>(null);
 
-  // Sync theme & active mode color palette to <html>
+  // Sync theme, active mode color palette & fonts to <html>
   useEffect(() => {
     const root = document.documentElement;
     if (theme === 'dark') {
@@ -193,6 +200,10 @@ function WorkspaceApp() {
     window.localStorage.setItem('cadence_theme', theme);
     applyPaletteToDocument(palettes, theme);
   }, [theme, palettes]);
+
+  useEffect(() => {
+    applyFontsToDocument(fonts);
+  }, [fonts]);
 
   const verifyAndProvisionUser = async (nextUser: User, autoRedeemCode: string | null) => {
     setAccessStatus('checking');
@@ -586,6 +597,11 @@ function WorkspaceApp() {
     saveStoredPalettes(next);
   };
 
+  const handleChangeFonts = (next: FontPreferences) => {
+    setFonts(next);
+    saveStoredFonts(next);
+  };
+
   const handleSelectBoard = async (boardId: string) => {
     setWorkspacePage('workspace');
     setActiveBoardId(boardId);
@@ -727,7 +743,9 @@ function WorkspaceApp() {
     <ThemeSettingsModal
       activeTheme={theme}
       palettes={palettes}
+      fonts={fonts}
       onChangePalettes={handleChangePalettes}
+      onChangeFonts={handleChangeFonts}
       onSwitchTheme={(nextMode) => {
         void handleSetTheme(nextMode);
       }}
