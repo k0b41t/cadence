@@ -315,52 +315,57 @@ export function ShareBoardModal({
                 </div>
               )}
 
-              {/* Utility permission checkboxes */}
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-700 dark:text-slate-300">
-                <label className="inline-flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={permissions.canCreateTasks}
-                    onChange={(e) =>
-                      setPermissions({ ...permissions, canCreateTasks: e.target.checked })
-                    }
-                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
-                  />
-                  <span>Create tasks</span>
-                </label>
-                <label className="inline-flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={permissions.canEditTasks}
-                    onChange={(e) =>
-                      setPermissions({ ...permissions, canEditTasks: e.target.checked })
-                    }
-                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
-                  />
-                  <span>Edit & move tasks</span>
-                </label>
-                <label className="inline-flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={permissions.canDeleteTasks}
-                    onChange={(e) =>
-                      setPermissions({ ...permissions, canDeleteTasks: e.target.checked })
-                    }
-                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
-                  />
-                  <span>Delete tasks</span>
-                </label>
-                <label className="inline-flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={permissions.canManageColumns}
-                    onChange={(e) =>
-                      setPermissions({ ...permissions, canManageColumns: e.target.checked })
-                    }
-                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
-                  />
-                  <span>Manage columns & WIP</span>
-                </label>
+              {/* Collaborator permissions */}
+              <div className="space-y-1.5">
+                <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-400">
+                  Collaborator Permissions
+                </div>
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-700 dark:text-slate-300">
+                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={permissions.canCreateTasks}
+                      onChange={(e) =>
+                        setPermissions({ ...permissions, canCreateTasks: e.target.checked })
+                      }
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                    />
+                    <span>Create tasks</span>
+                  </label>
+                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={permissions.canEditTasks}
+                      onChange={(e) =>
+                        setPermissions({ ...permissions, canEditTasks: e.target.checked })
+                      }
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                    />
+                    <span>Edit & move tasks</span>
+                  </label>
+                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={permissions.canDeleteTasks}
+                      onChange={(e) =>
+                        setPermissions({ ...permissions, canDeleteTasks: e.target.checked })
+                      }
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                    />
+                    <span>Delete tasks</span>
+                  </label>
+                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={permissions.canManageColumns}
+                      onChange={(e) =>
+                        setPermissions({ ...permissions, canManageColumns: e.target.checked })
+                      }
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                    />
+                    <span>Add & manage columns</span>
+                  </label>
+                </div>
               </div>
 
               <div className="flex items-center justify-between gap-4 pt-1">
@@ -431,14 +436,13 @@ export function ShareBoardModal({
                     )}
                   </div>
 
-                  {/* Interactive granular toggles for Creator/Admin */}
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-slate-600 dark:text-slate-400">
                     {(
                       [
                         ['canCreateTasks', 'Create tasks'],
-                        ['canEditTasks', 'Edit & move'],
+                        ['canEditTasks', 'Edit & move tasks'],
                         ['canDeleteTasks', 'Delete tasks'],
-                        ['canManageColumns', 'Manage columns'],
+                        ['canManageColumns', 'Add & manage columns'],
                       ] as const
                     ).map(([key, label]) => (
                       <label
@@ -533,7 +537,7 @@ export function ShareBoardModal({
                           setInvitePerms({ ...invitePerms, canEditTasks: e.target.checked })
                         }
                       />
-                      <span>Edit & move</span>
+                      <span>Edit & move tasks</span>
                     </label>
                     <label className="inline-flex items-center gap-1.5 cursor-pointer">
                       <input
@@ -553,7 +557,7 @@ export function ShareBoardModal({
                           setInvitePerms({ ...invitePerms, canManageColumns: e.target.checked })
                         }
                       />
-                      <span>Manage columns</span>
+                      <span>Add & manage columns</span>
                     </label>
                   </div>
                 </form>
@@ -561,7 +565,17 @@ export function ShareBoardModal({
 
               {activeInvites.length > 0 && (
                 <ul className="space-y-2">
-                  {activeInvites.map((inv) => (
+                  {activeInvites.map((inv) => {
+                    const permSummary = [
+                      inv.canCreateTasks ? 'Create tasks' : null,
+                      inv.canEditTasks ? 'Edit & move' : null,
+                      inv.canDeleteTasks ? 'Delete tasks' : null,
+                      inv.canManageColumns ? 'Add/manage columns' : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || 'View only';
+
+                    return (
                     <li
                       key={inv.id}
                       className="flex items-center justify-between gap-3 px-3.5 py-2.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
@@ -573,8 +587,8 @@ export function ShareBoardModal({
                             {ROLE_PRESETS[inv.role].label}
                           </span>
                         </div>
-                        <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate">
-                          Code: {board.id}:{inv.id}
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                          {permSummary}
                         </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
@@ -604,7 +618,8 @@ export function ShareBoardModal({
                         </button>
                       </div>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               )}
             </div>

@@ -157,7 +157,7 @@ VITE_FIREBASE_APP_ID="1:1234567890:web:abcdef"
 VITE_FIREBASE_DATABASE_ID="(default)"`,
       },
       {
-        label: 'firestore.rules — Default-deny safety net & board RBAC gate',
+        label: 'firestore.rules — Default-deny safety net, whitelist gate & color validation',
         language: 'javascript',
         code: `rules_version = '2';
 service cloud.firestore {
@@ -170,6 +170,9 @@ service cloud.firestore {
     function isVerifiedUser() {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
+    function isAllowedWorkspaceUser() {
+      return isAdmin() || isWhitelistedEmail();
+    }
     function isValidColumnColorValue(color) {
       return color in ['slate', 'amber', 'red', 'emerald', 'blue', 'violet']
         || (color is string && color.size() == 7 && color.matches('^#[0-9a-fA-F]{6}$'));
@@ -180,10 +183,10 @@ service cloud.firestore {
     ],
     walkthrough: [
       {
-        heading: '1. Why Cadence Needs Cloud Services & How It Stays $0',
+        heading: '1. Why Cadence Needs Cloud Services, Encapsulation & $0 Spark Plan',
         paragraphs: [
           'Without a cloud database, tasks stored in browser localStorage vanish when cache is cleared and cannot sync between teammates. Firebase gives us Google Sign-In, real-time Cloud Firestore sync, and HTTPS hosting.',
-          'To stay 100% free on the Spark plan (no credit card), avoid Cloud Functions, Express servers on Cloud Run, and paid server proxies. Keep Cadence a static Vite + React Single-Page App where the browser talks directly to Auth and Firestore.',
+          'To stay 100% free on the Spark plan (no credit card), avoid Cloud Functions, Express servers on Cloud Run, and paid server proxies. Keep Cadence a static Vite + React Single-Page App where the browser talks directly to Auth and Firestore. This also keeps Cadence completely encapsulated inside its own Firebase project—no Google Cloud servers or AI Studio Gemini projects are required in production.',
         ],
       },
       {
@@ -196,7 +199,7 @@ service cloud.firestore {
           'Authentication → Sign-in method → Enable Google (ensure localhost is an authorized domain).',
           'Firestore Database → Create database → keep the (default) database ID in Production mode.',
           'Project Settings → Add Web App (</>) → paste those values into a gitignored .env.local file in your project root (Vite loads .env.local for both npm run dev and npm run deploy:prod).',
-          'Design firebase-blueprint.json and firestore.rules first: because browsers connect directly to Firestore, Security Rules are your backend bouncer (split PII into users/{uid}/private/info, index share invites with SHA-256 emailLookup, enforce server timestamps request.time, and lock every field with affectedKeys().hasOnly(...)).',
+          'Design firebase-blueprint.json and firestore.rules first: because browsers connect directly to Firestore, Security Rules are your backend bouncer (enforce isAllowedWorkspaceUser() on writes, split PII into users/{uid}/private/info, index share invites with SHA-256 emailLookup, enforce server timestamps request.time, and lock every field with affectedKeys().hasOnly(...)).',
         ],
       },
     ],
@@ -266,7 +269,7 @@ npm run dev`,
       'Model Boards, Columns, Tasks, and Subtasks in TypeScript, initialize dual-env Firebase, and build stable onSnapshot listeners.',
     snippets: [
       {
-        label: 'src/lib/firebase.ts (supports .env.production & (default) DB)',
+        label: 'src/lib/firebase.ts (supports .env.local & (default) DB)',
         language: 'ts',
         code: `import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
@@ -327,10 +330,23 @@ googleProvider.setCustomParameters({ prompt: 'select_account' });`,
   {
     id: 'ui-features',
     number: '06',
-    title: 'Core Kanban, RGB Color Rules & Zoomable Calendar',
+    title: 'Kanban UI, Dark Scrollbars, RGB Rules & Calendar Zoom',
     summary:
-      'Build My Tasks Only filters, conditional checklist arrows on TaskCard, canvas RGB palette column tinting, and scroll-wheel Days/Weeks/Months calendar zoom.',
+      'Build My Tasks Only filters, conditional checklist arrows, dark-mode scrollbar styling, canvas RGB column tinting, and scroll-wheel Days/Weeks/Months zoom.',
     snippets: [
+      {
+        label: 'src/index.css — Dark-mode native controls & subtle dark scrollbars',
+        language: 'css',
+        code: `html.dark { color-scheme: dark; }
+html.dark * {
+  scrollbar-color: rgba(51, 65, 85, 0.7) transparent;
+  scrollbar-width: thin;
+}
+html.dark ::-webkit-scrollbar-thumb {
+  background-color: rgba(51, 65, 85, 0.65);
+  border-radius: 9999px;
+}`,
+      },
       {
         label: 'TaskCard.tsx — Conditional checklist arrow + stopPropagation',
         language: 'tsx',
@@ -368,9 +384,10 @@ googleProvider.setCustomParameters({ prompt: 'select_account' });`,
     ],
     walkthrough: [
       {
-        heading: '1. Expandable Card Checklists & Filters',
+        heading: '1. Expandable Card Checklists, Filters & Dark Scrollbars',
         paragraphs: [
           'The top-right expand arrow only renders when subtasks.length > 0. Both the arrow and inline checklist toggles call e.stopPropagation() so clicking them does not accidentally open the full TaskDetailModal. Next to Hide completed, the My Tasks Only toggle filters tasks where task.assigneeId === user?.uid.',
+          'In src/index.css, setting color-scheme: dark and custom slate-700 ::-webkit-scrollbar / scrollbar-color rules replaces bright Windows scrollbars with low-glare dark tracks that blend into slate-900/950 surfaces.',
         ],
       },
       {
@@ -388,8 +405,69 @@ googleProvider.setCustomParameters({ prompt: 'select_account' });`,
     ],
   },
   {
-    id: 'notifications-deploy',
+    id: 'admin-whitelist',
     number: '07',
+    title: 'Admin Permissions, Email Whitelist & Board Sharing',
+    summary:
+      'Gate workspace entry behind an admin whitelist, control who can create boards, issue join codes (?access=CODE), and let board creators assign column/task permissions.',
+    snippets: [
+      {
+        label: 'firestore.rules — Per-user board creation & code redemption',
+        language: 'javascript',
+        code: `function canUserCreateBoards() {
+  return isAdmin() || (
+    isWhitelistedEmail()
+    && 'canCreateBoards' in get(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())).data
+    && get(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())).data.canCreateBoards == true
+  );
+}
+
+match /boards/{boardId} {
+  allow create: if canUserCreateBoards() && ...;
+}`,
+      },
+      {
+        label: 'App.tsx — Verify whitelist & board permission before provisioning',
+        language: 'ts',
+        code: `const adminStatus = await checkIsAdmin(nextUser);
+let wlStatus = await checkUserWhitelistAccess(nextUser, adminStatus.isAdmin);
+if (!wlStatus.allowed && !wlStatus.suspended && pendingAccessCode) {
+  const redeemed = await redeemAccessCode(nextUser, pendingAccessCode);
+  wlStatus = { allowed: true, suspended: false, canCreateBoards: redeemed.canCreateBoards, email: wlStatus.email };
+}
+if (!wlStatus.allowed) {
+  setAccessStatus('denied');
+  return;
+}
+await ensureUserAndStarterWorkspace(nextUser, adminStatus.isAdmin || wlStatus.canCreateBoards);`,
+      },
+    ],
+    walkthrough: [
+      {
+        heading: '1. Zero-Trust Whitelist & Board Creation Gate',
+        paragraphs: [
+          'When a user signs in with Google, App.tsx runs checkIsAdmin and checkUserWhitelistAccess BEFORE calling ensureUserAndStarterWorkspace. Unlisted or paused users see AccessDeniedView instead of provisioning profiles.',
+          'Admins also toggle per-user board creation (canCreateBoards) on whitelist entries and join codes. Users without board-creation rights can join shared boards via invite links, while firestore.rules enforces canUserCreateBoards() on every /boards/{boardId} create.',
+        ],
+      },
+      {
+        heading: '2. Dedicated Admin Page & Join Access Codes',
+        paragraphs: [
+          'Admins (starting with btuttle@orangeusd.org) open Workspace Admin from the top bar or Sidebar to add single emails, bulk-paste rosters, toggle Create boards or Pause/Resume per account, generate join codes with preset permissions, and manage Global Admins.',
+          'Clicking Copy Join Link copies a ?access=CODE URL that activates the verified user into /whitelist using the code’s cohort label and canCreateBoards setting.',
+        ],
+      },
+      {
+        heading: '3. Board Creator Collaborator Permissions',
+        paragraphs: [
+          'Inside any board’s Share & Permissions modal, the Board Creator chooses exactly what added collaborators or invite links can do: Create tasks, Edit & move tasks, Delete tasks, and Add & manage columns—and can toggle those permissions live at any time.',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'notifications-deploy',
+    number: '08',
     title: 'Notifications & One-Command Free Deploy',
     summary:
       'Track upcoming due dates and milestones with per-task mute toggles, configure firebase.json, and ship live via npm run deploy:prod.',
@@ -411,7 +489,8 @@ googleProvider.setCustomParameters({ prompt: 'select_account' });`,
       {
         label: 'Deploy live from C:\\Users\\<you>\\dev\\cadence',
         language: 'bat',
-        code: `npm run lint
+        code: `git pull
+npm run lint
 firebase login
 firebase use <your-spark-project-id>
 npm run deploy:prod`,
@@ -574,7 +653,7 @@ export function DocsModal({ onClose }: DocsModalProps) {
           <article className="flex-1 overflow-y-auto p-5 sm:p-7 space-y-6">
             <header className="space-y-2 pb-4 border-b border-slate-200 dark:border-slate-800">
               <div className="text-xs font-mono tabular-nums text-blue-600 dark:text-blue-400 font-medium">
-                PART {activeSection.number} OF 07
+                PART {activeSection.number} OF {String(DOC_SECTIONS.length).padStart(2, '0')}
               </div>
               <h3 className="font-display text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100">
                 {activeSection.title}

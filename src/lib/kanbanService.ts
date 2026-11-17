@@ -231,7 +231,10 @@ export async function checkIsAdmin(user: User): Promise<{ isAdmin: boolean; isBo
   }
 }
 
-export async function ensureUserAndStarterWorkspace(user: User): Promise<UserProfile> {
+export async function ensureUserAndStarterWorkspace(
+  user: User,
+  canCreateBoards = true
+): Promise<UserProfile> {
   assertValidId(user.uid, 'userId');
   const userPath = `users/${user.uid}`;
   const privatePath = `users/${user.uid}/private/info`;
@@ -354,25 +357,27 @@ export async function ensureUserAndStarterWorkspace(user: User): Promise<UserPro
     }
   }
 
-  // Provision starter board only if the user owns 0 boards and has 0 shared boards
-  try {
-    const [ownedSnaps, sharedSnaps] = await Promise.all([
-      getDocs(query(collection(db, 'boards'), where('ownerId', '==', user.uid))),
-      getDocs(query(collection(db, 'users', user.uid, 'boardRefs'), where('userId', '==', user.uid))),
-    ]);
-    if (ownedSnaps.empty && sharedSnaps.empty) {
-      const boardId = await createBoard(
-        user.uid,
-        'Product Launch',
-        'Track milestones, design reviews, and release engineering tasks.',
-        'standard',
-        true,
-        displayName
-      );
-      await updateUserActiveBoard(user.uid, boardId);
+  // Provision starter board only if the user can create boards and has 0 accessible boards
+  if (canCreateBoards) {
+    try {
+      const [ownedSnaps, sharedSnaps] = await Promise.all([
+        getDocs(query(collection(db, 'boards'), where('ownerId', '==', user.uid))),
+        getDocs(query(collection(db, 'users', user.uid, 'boardRefs'), where('userId', '==', user.uid))),
+      ]);
+      if (ownedSnaps.empty && sharedSnaps.empty) {
+        const boardId = await createBoard(
+          user.uid,
+          'Product Launch',
+          'Track milestones, design reviews, and release engineering tasks.',
+          'standard',
+          true,
+          displayName
+        );
+        await updateUserActiveBoard(user.uid, boardId);
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.LIST, 'boards');
     }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'boards');
   }
 
   try {
@@ -1955,32 +1960,54 @@ export async function checkUserWhitelistAccess(
 ): Promise<WhitelistAccessStatus> {
   const rawEmail = user.email?.trim().toLowerCase() ?? '';
   if (isAdminFlag) {
-    return { allowed: true, suspended: false, email: rawEmail };
+    return { allowed: true, suspended: false, canCreateBoards: true, email: rawEmail };
   }
   if (!user.emailVerified || !rawEmail || !EMAIL_KEY_REGEX.test(rawEmail)) {
-    return { allowed: false, suspended: false, email: rawEmail };
+    return { allowed: false, suspended: false, canCreateBoards: false, email: rawEmail };
   }
 
   const path = `whitelist/${rawEmail}`;
   try {
     const snap = await getDoc(doc(db, 'whitelist', rawEmail));
     if (!snap.exists()) {
-      return { allowed: false, suspended: false, email: rawEmail };
+      return { allowed: false, suspended: false, canCreateBoards: false, email: rawEmail };
     }
     const entry = snap.data() as WhitelistEntry;
     if (entry.active === true) {
-      return { allowed: true, suspended: false, email: rawEmail };
+      return {
+        allowed: true,
+        suspended: false,
+        canCreateBoards: entry.canCreateBoards === true,
+        email: rawEmail,
+      };
     }
-    return { allowed: false, suspended: true, email: rawEmail };
+    return { allowed: false, suspended: true, canCreateBoards: false, email: rawEmail };
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, path);
   }
 }
 
+export function subscribeMyWhitelistEntry(
+  emailKey: string,
+  onData: (entry: WhitelistEntry | null) => void
+): Unsubscribe {
+  const normalized = emailKey.trim().toLowerCase();
+  const path = `whitelist/${normalized}`;
+  return onSnapshot(
+    doc(db, 'whitelist', normalized),
+    (snapshot) => {
+      onData(snapshot.exists() ? (snapshot.data() as WhitelistEntry) : null);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.GET, path);
+    }
+  );
+}
+
 export async function redeemAccessCode(
   user: User,
   rawCode: string
-): Promise<{ codeId: string; label: string }> {
+): Promise<{ codeId: string; label: string; canCreateBoards: boolean }> {
   assertValidId(user.uid, 'userId');
   if (!user.email || !user.emailVerified) {
     throw new Error('A verified Google email address is required to redeem an access code.');
@@ -1995,7 +2022,11 @@ export async function redeemAccessCode(
     if (existingSnap.exists()) {
       const existingData = existingSnap.data() as WhitelistEntry;
       if (existingData.active) {
-        return { codeId, label: existingData.label || '' };
+        return {
+          codeId,
+          label: existingData.label || '',
+          canCreateBoards: existingData.canCreateBoards === true,
+        };
       }
       throw new Error(
         'Access for this email is currently paused by an administrator. Contact your admin to re-enable your account.'
@@ -2028,11 +2059,13 @@ export async function redeemAccessCode(
   }
 
   const cleanLabel = sanitizeText(codeData.label || '', LIMITS.WHITELIST_LABEL_MAX);
+  const canCreateBoards = codeData.canCreateBoards === true;
   try {
     await setDoc(doc(db, 'whitelist', emailKey), {
       email: emailKey,
       label: cleanLabel,
       active: true,
+      canCreateBoards,
       addedBy: user.uid,
       inviteCode: codeId,
       createdAt: serverTimestamp(),
@@ -2042,7 +2075,7 @@ export async function redeemAccessCode(
     handleFirestoreError(error, OperationType.CREATE, whitelistPath);
   }
 
-  return { codeId, label: cleanLabel };
+  return { codeId, label: cleanLabel, canCreateBoards };
 }
 
 export function subscribeWhitelist(onData: (entries: WhitelistEntry[]) => void): Unsubscribe {
@@ -2062,7 +2095,8 @@ export function subscribeWhitelist(onData: (entries: WhitelistEntry[]) => void):
 export async function upsertWhitelistEntry(
   actorUid: string,
   rawEmail: string,
-  label: string
+  label: string,
+  canCreateBoards = false
 ): Promise<{ email: string; updatedExisting: boolean }> {
   assertValidId(actorUid, 'userId');
   const emailKey = normalizeEmailKey(rawEmail);
@@ -2076,6 +2110,7 @@ export async function upsertWhitelistEntry(
       await updateDoc(ref, {
         label: cleanLabel || (snap.data() as WhitelistEntry).label || '',
         active: true,
+        canCreateBoards,
         updatedAt: serverTimestamp(),
       });
       return { email: emailKey, updatedExisting: true };
@@ -2084,6 +2119,7 @@ export async function upsertWhitelistEntry(
       email: emailKey,
       label: cleanLabel,
       active: true,
+      canCreateBoards,
       addedBy: actorUid,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -2098,6 +2134,7 @@ export async function bulkAddWhitelistEmails(
   actorUid: string,
   rawText: string,
   label: string,
+  canCreateBoards: boolean,
   existingEntries: WhitelistEntry[]
 ): Promise<{ added: number; reactivated: number; invalid: string[] }> {
   assertValidId(actorUid, 'userId');
@@ -2139,10 +2176,15 @@ export async function bulkAddWhitelistEmails(
       const existingEntry = existingByEmail.get(emailKey);
       const ref = doc(db, 'whitelist', emailKey);
       if (existingEntry) {
-        if (!existingEntry.active || (cleanLabel && cleanLabel !== existingEntry.label)) {
+        if (
+          !existingEntry.active ||
+          (cleanLabel && cleanLabel !== existingEntry.label) ||
+          (existingEntry.canCreateBoards === true) !== canCreateBoards
+        ) {
           batch.update(ref, {
             label: cleanLabel || existingEntry.label || '',
             active: true,
+            canCreateBoards,
             updatedAt: serverTimestamp(),
           });
           reactivated += 1;
@@ -2153,6 +2195,7 @@ export async function bulkAddWhitelistEmails(
           email: emailKey,
           label: cleanLabel,
           active: true,
+          canCreateBoards,
           addedBy: actorUid,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -2180,6 +2223,22 @@ export async function setWhitelistEntryActive(rawEmail: string, active: boolean)
   try {
     await updateDoc(doc(db, 'whitelist', emailKey), {
       active,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function setWhitelistEntryCanCreateBoards(
+  rawEmail: string,
+  canCreateBoards: boolean
+): Promise<void> {
+  const emailKey = normalizeEmailKey(rawEmail);
+  const path = `whitelist/${emailKey}`;
+  try {
+    await updateDoc(doc(db, 'whitelist', emailKey), {
+      canCreateBoards,
       updatedAt: serverTimestamp(),
     });
   } catch (error) {
@@ -2216,7 +2275,8 @@ export function subscribeAccessCodes(onData: (codes: AccessCode[]) => void): Uns
 export async function createAccessCode(
   actorUid: string,
   label: string,
-  customCode?: string
+  customCode?: string,
+  canCreateBoards = false
 ): Promise<string> {
   assertValidId(actorUid, 'userId');
   const cleanLabel = sanitizeText(label, LIMITS.WHITELIST_LABEL_MAX);
@@ -2234,6 +2294,7 @@ export async function createAccessCode(
       id: codeId,
       label: cleanLabel,
       active: true,
+      canCreateBoards,
       createdBy: actorUid,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -2254,6 +2315,22 @@ export async function setAccessCodeActive(codeId: string, active: boolean): Prom
   try {
     await updateDoc(doc(db, 'accessCodes', cleanId), {
       active,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function setAccessCodeCanCreateBoards(
+  codeId: string,
+  canCreateBoards: boolean
+): Promise<void> {
+  const cleanId = normalizeAccessCodeId(codeId);
+  const path = `accessCodes/${cleanId}`;
+  try {
+    await updateDoc(doc(db, 'accessCodes', cleanId), {
+      canCreateBoards,
       updatedAt: serverTimestamp(),
     });
   } catch (error) {

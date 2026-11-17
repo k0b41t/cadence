@@ -14,6 +14,7 @@ interface BoardModalProps {
   mode: 'create' | 'edit';
   board?: Board;
   isAdmin: boolean;
+  canCreateBoards: boolean;
   onCreated: (boardId: string) => void;
   onDeleted: (deletedBoardId: string) => void;
   onClose: () => void;
@@ -25,6 +26,7 @@ export function BoardModal({
   mode,
   board,
   isAdmin,
+  canCreateBoards,
   onCreated,
   onDeleted,
   onClose,
@@ -40,7 +42,8 @@ export function BoardModal({
 
   const isArchived = mode === 'edit' && board?.status === 'archived';
   const canEditBoard =
-    mode === 'create' || (Boolean(board) && (isAdmin || (board!.ownerId === uid && !isArchived)));
+    (mode === 'create' && (isAdmin || canCreateBoards)) ||
+    (mode === 'edit' && Boolean(board) && (isAdmin || (board!.ownerId === uid && !isArchived)));
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {

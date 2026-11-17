@@ -42,7 +42,9 @@ export function JoinBoardModal({
   onClose,
 }: JoinBoardModalProps) {
   const [rawCode, setRawCode] = useState(
-    initialBoardId && initialInviteId ? `${initialBoardId}:${initialInviteId}` : ''
+    initialBoardId && initialInviteId && typeof window !== 'undefined'
+      ? `${window.location.origin}${window.location.pathname}?join=${encodeURIComponent(initialBoardId)}&code=${encodeURIComponent(initialInviteId)}`
+      : ''
   );
   const [joining, setJoining] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -61,7 +63,7 @@ export function JoinBoardModal({
 
     const parsed = parseJoinInput(rawCode);
     if (!parsed) {
-      setErrorMsg('Paste a valid board invite link or code (boardId:inviteId).');
+      setErrorMsg('Paste a valid board invite link.');
       return;
     }
 
@@ -111,7 +113,7 @@ export function JoinBoardModal({
 
           <div className="space-y-1.5">
             <label htmlFor="join-code-input" className="block text-xs font-medium text-slate-600 dark:text-slate-400">
-              Invite Link or Join Code
+              Board Invite Link
             </label>
             <input
               id="join-code-input"
@@ -120,8 +122,8 @@ export function JoinBoardModal({
               required
               value={rawCode}
               onChange={(e) => setRawCode(e.target.value)}
-              placeholder="brd_...:inv_... or full invite URL"
-              className="w-full px-3.5 py-2 text-sm font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+              placeholder="Paste shared board invite link"
+              className="w-full px-3.5 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
             />
           </div>
 

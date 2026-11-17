@@ -106,7 +106,7 @@ export const ROLE_PRESETS: Record<
   },
   manager: {
     label: 'Board Manager',
-    description: 'Full task utilities plus column & WIP management',
+    description: 'Create, edit, delete tasks, plus add & manage columns',
     permissions: {
       canView: true,
       canCreateTasks: true,
@@ -129,6 +129,7 @@ export interface WhitelistEntry {
   email: string;
   label: string;
   active: boolean;
+  canCreateBoards?: boolean;
   addedBy: string;
   inviteCode?: string;
   createdAt: Timestamp | null;
@@ -139,6 +140,7 @@ export interface AccessCode {
   id: string;
   label: string;
   active: boolean;
+  canCreateBoards?: boolean;
   createdBy: string;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
@@ -147,6 +149,7 @@ export interface AccessCode {
 export interface WhitelistAccessStatus {
   allowed: boolean;
   suspended: boolean;
+  canCreateBoards: boolean;
   email: string;
 }
 

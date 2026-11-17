@@ -53,6 +53,14 @@ service cloud.firestore {
       return isAdmin() || isWhitelistedEmail();
     }
 
+    function canUserCreateBoards() {
+      return isAdmin() || (
+        isWhitelistedEmail()
+        && 'canCreateBoards' in get(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())).data
+        && get(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())).data.canCreateBoards == true
+      );
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -154,6 +162,7 @@ service cloud.firestore {
       return data.email is string && data.email == emailKey && isValidEmailKey(data.email)
         && data.label is string && data.label.size() <= 80
         && data.active is bool
+        && (!('canCreateBoards' in data) || data.canCreateBoards is bool)
         && data.addedBy is string && isValidId(data.addedBy)
         && (!('inviteCode' in data) || isValidOptionalId(data.inviteCode))
         && data.createdAt is timestamp
@@ -164,6 +173,7 @@ service cloud.firestore {
       return data.id is string && data.id == codeId && isValidId(data.id) && data.id.size() >= 4
         && data.label is string && data.label.size() <= 80
         && data.active is bool
+        && (!('canCreateBoards' in data) || data.canCreateBoards is bool)
         && data.createdBy is string && isValidId(data.createdBy)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -399,7 +409,7 @@ service cloud.firestore {
       allow create: if isAdmin()
         && isValidId(codeId) && codeId.size() >= 4
         && incoming().keys().hasAll(['id', 'label', 'active', 'createdBy', 'createdAt', 'updatedAt'])
-        && incoming().keys().hasOnly(['id', 'label', 'active', 'createdBy', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['id', 'label', 'active', 'canCreateBoards', 'createdBy', 'createdAt', 'updatedAt'])
         && isValidAccessCode(incoming(), codeId)
         && incoming().createdBy == request.auth.uid
         && incoming().createdAt == request.time
@@ -414,7 +424,9 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['label', 'active', 'updatedAt'])
+          incoming().diff(existing()).affectedKeys().hasOnly(['canCreateBoards', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['label', 'active', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['label', 'active', 'canCreateBoards', 'updatedAt'])
         );
 
       allow delete: if isAdmin() && isValidId(codeId);
@@ -438,14 +450,14 @@ service cloud.firestore {
           (
             isAdmin()
             && incoming().keys().hasAll(['email', 'label', 'active', 'addedBy', 'createdAt', 'updatedAt'])
-            && incoming().keys().hasOnly(['email', 'label', 'active', 'addedBy', 'inviteCode', 'createdAt', 'updatedAt'])
+            && incoming().keys().hasOnly(['email', 'label', 'active', 'canCreateBoards', 'addedBy', 'inviteCode', 'createdAt', 'updatedAt'])
             && incoming().addedBy == request.auth.uid
           ) || (
             isVerifiedUser()
             && request.auth.token.email is string
             && request.auth.token.email.lower() == emailKey
-            && incoming().keys().hasAll(['email', 'label', 'active', 'addedBy', 'inviteCode', 'createdAt', 'updatedAt'])
-            && incoming().keys().hasOnly(['email', 'label', 'active', 'addedBy', 'inviteCode', 'createdAt', 'updatedAt'])
+            && incoming().keys().hasAll(['email', 'label', 'active', 'canCreateBoards', 'addedBy', 'inviteCode', 'createdAt', 'updatedAt'])
+            && incoming().keys().hasOnly(['email', 'label', 'active', 'canCreateBoards', 'addedBy', 'inviteCode', 'createdAt', 'updatedAt'])
             && incoming().active == true
             && incoming().addedBy == request.auth.uid
             && isValidId(incoming().inviteCode)
@@ -453,6 +465,7 @@ service cloud.firestore {
             && exists(/databases/$(database)/documents/accessCodes/$(incoming().inviteCode))
             && get(/databases/$(database)/documents/accessCodes/$(incoming().inviteCode)).data.active == true
             && incoming().label == get(/databases/$(database)/documents/accessCodes/$(incoming().inviteCode)).data.label
+            && incoming().canCreateBoards == (('canCreateBoards' in get(/databases/$(database)/documents/accessCodes/$(incoming().inviteCode)).data) && get(/databases/$(database)/documents/accessCodes/$(incoming().inviteCode)).data.canCreateBoards == true)
           )
         );
 
@@ -464,7 +477,9 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           incoming().diff(existing()).affectedKeys().hasOnly(['active', 'updatedAt']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['label', 'active', 'updatedAt'])
+          incoming().diff(existing()).affectedKeys().hasOnly(['canCreateBoards', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['label', 'active', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['label', 'active', 'canCreateBoards', 'updatedAt'])
         );
 
       allow delete: if isAdmin() && isValidEmailKey(emailKey);
@@ -613,7 +628,7 @@ service cloud.firestore {
         resource.data.ownerId == request.auth.uid
       );
 
-      allow create: if isAllowedWorkspaceUser()
+      allow create: if canUserCreateBoards()
         && isValidId(boardId)
         && incoming().keys().hasAll(['id', 'ownerId', 'title', 'description', 'status', 'createdAt', 'updatedAt'])
         && incoming().keys().hasOnly(['id', 'ownerId', 'ownerDisplayName', 'title', 'description', 'status', 'createdAt', 'updatedAt'])

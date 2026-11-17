@@ -20,6 +20,7 @@ interface SidebarProps {
   profile: UserProfile | null;
   userEmail: string | null;
   isAdmin: boolean;
+  canCreateBoards: boolean;
   isAdminPageActive: boolean;
   mobileOpen: boolean;
   onCloseMobile: () => void;
@@ -37,6 +38,7 @@ export function Sidebar({
   profile,
   userEmail,
   isAdmin,
+  canCreateBoards,
   isAdminPageActive,
   mobileOpen,
   onCloseMobile,
@@ -98,21 +100,23 @@ export function Sidebar({
                   onCloseMobile();
                 }}
                 aria-label="Join shared board"
-                title="Join board via link or code"
+                title="Join shared board via invite link"
                 className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 px-1.5 py-0.5 rounded transition-colors whitespace-nowrap shrink-0"
               >
                 <Link2 className="w-3.5 h-3.5" />
                 <span>Join</span>
               </button>
-              <button
-                type="button"
-                onClick={onOpenNewBoard}
-                aria-label="Create new board"
-                className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 px-1.5 py-0.5 rounded transition-colors whitespace-nowrap shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>New</span>
-              </button>
+              {canCreateBoards && (
+                <button
+                  type="button"
+                  onClick={onOpenNewBoard}
+                  aria-label="Create new board"
+                  className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 px-1.5 py-0.5 rounded transition-colors whitespace-nowrap shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>New</span>
+                </button>
+              )}
             </div>
           </div>
 

@@ -139,6 +139,7 @@ async function runTests() {
         email: allowedEmail,
         label: 'Test Cohort',
         active: true,
+        canCreateBoards: allowedEmail === CREATOR.email,
         addedBy: ADMIN.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -461,6 +462,7 @@ async function runTests() {
       email: 'student1@orangeusd.org',
       label: 'Period 2',
       active: true,
+      canCreateBoards: false,
       addedBy: ADMIN.uid,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -468,8 +470,15 @@ async function runTests() {
   );
   await assertSucceeds(
     updateDoc(doc(dbAdmin, 'whitelist', 'student1@orangeusd.org'), {
+      canCreateBoards: true,
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(
+    updateDoc(doc(dbAdmin, 'whitelist', 'student1@orangeusd.org'), {
       label: 'Period 3',
       active: false,
+      canCreateBoards: false,
       updatedAt: serverTimestamp(),
     })
   );
@@ -479,7 +488,20 @@ async function runTests() {
       id: 'CAD_SPRING26',
       label: 'Spring 26',
       active: true,
+      canCreateBoards: false,
       createdBy: ADMIN.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertFails(
+    setDoc(doc(dbBlocked, 'whitelist', UNWHITELISTED.email), {
+      email: UNWHITELISTED.email,
+      label: 'Spring 26',
+      active: true,
+      canCreateBoards: true,
+      addedBy: UNWHITELISTED.uid,
+      inviteCode: 'CAD_SPRING26',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     })
@@ -489,8 +511,31 @@ async function runTests() {
       email: UNWHITELISTED.email,
       label: 'Spring 26',
       active: true,
+      canCreateBoards: false,
       addedBy: UNWHITELISTED.uid,
       inviteCode: 'CAD_SPRING26',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertFails(
+    setDoc(doc(dbOutsider, 'boards', 'board_denied'), {
+      id: 'board_denied',
+      ownerId: OUTSIDER.uid,
+      title: 'Unauthorized Board',
+      description: 'No create permission',
+      status: 'active',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(
+    setDoc(doc(dbCreator, 'boards', 'board_allowed'), {
+      id: 'board_allowed',
+      ownerId: CREATOR.uid,
+      title: 'Creator Board',
+      description: 'Allowed to create',
+      status: 'active',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     })

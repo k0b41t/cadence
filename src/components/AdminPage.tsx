@@ -22,7 +22,9 @@ import {
   removeWhitelistEntry,
   revokeGlobalAdmin,
   setAccessCodeActive,
+  setAccessCodeCanCreateBoards,
   setWhitelistEntryActive,
+  setWhitelistEntryCanCreateBoards,
   subscribeAccessCodes,
   subscribeAdmins,
   subscribeWhitelist,
@@ -59,6 +61,7 @@ export function AdminPage({
   const [emailInput, setEmailInput] = useState('');
   const [bulkEmailsInput, setBulkEmailsInput] = useState('');
   const [labelInput, setLabelInput] = useState('');
+  const [allowBoardCreate, setAllowBoardCreate] = useState(false);
   const [whitelistBusy, setWhitelistBusy] = useState(false);
   const [whitelistFeedback, setWhitelistFeedback] = useState<{
     kind: 'success' | 'error';
@@ -70,6 +73,7 @@ export function AdminPage({
   // Access code generator state
   const [codeLabelInput, setCodeLabelInput] = useState('');
   const [customCodeInput, setCustomCodeInput] = useState('');
+  const [codeAllowBoardCreate, setCodeAllowBoardCreate] = useState(false);
   const [codeBusy, setCodeBusy] = useState(false);
   const [codeFeedback, setCodeFeedback] = useState<{
     kind: 'success' | 'error';
@@ -142,7 +146,7 @@ export function AdminPage({
     setWhitelistBusy(true);
     setWhitelistFeedback(null);
     try {
-      const res = await upsertWhitelistEntry(uid, emailInput, labelInput);
+      const res = await upsertWhitelistEntry(uid, emailInput, labelInput, allowBoardCreate);
       setWhitelistFeedback({
         kind: 'success',
         text: res.updatedExisting
@@ -166,7 +170,13 @@ export function AdminPage({
     setWhitelistBusy(true);
     setWhitelistFeedback(null);
     try {
-      const res = await bulkAddWhitelistEmails(uid, bulkEmailsInput, labelInput, whitelist);
+      const res = await bulkAddWhitelistEmails(
+        uid,
+        bulkEmailsInput,
+        labelInput,
+        allowBoardCreate,
+        whitelist
+      );
       const parts: string[] = [];
       if (res.added > 0) parts.push(`${res.added} added`);
       if (res.reactivated > 0) parts.push(`${res.reactivated} updated`);
@@ -202,6 +212,18 @@ export function AdminPage({
     }
   };
 
+  const handleToggleWhitelistCreateBoards = async (entry: WhitelistEntry) => {
+    setWhitelistFeedback(null);
+    try {
+      await setWhitelistEntryCanCreateBoards(entry.email, !(entry.canCreateBoards === true));
+    } catch (err) {
+      setWhitelistFeedback({
+        kind: 'error',
+        text: err instanceof Error ? err.message : 'Unable to update board creation permission.',
+      });
+    }
+  };
+
   const handleRemoveWhitelist = async (entry: WhitelistEntry) => {
     setWhitelistFeedback(null);
     try {
@@ -224,7 +246,12 @@ export function AdminPage({
     setCodeBusy(true);
     setCodeFeedback(null);
     try {
-      const generatedId = await createAccessCode(uid, codeLabelInput, customCodeInput);
+      const generatedId = await createAccessCode(
+        uid,
+        codeLabelInput,
+        customCodeInput,
+        codeAllowBoardCreate
+      );
       setCodeFeedback({
         kind: 'success',
         text: `Created join access code ${generatedId}. Anyone who signs in with it is automatically whitelisted.`,
@@ -249,6 +276,18 @@ export function AdminPage({
       setCodeFeedback({
         kind: 'error',
         text: err instanceof Error ? err.message : 'Unable to update access code status.',
+      });
+    }
+  };
+
+  const handleToggleCodeCreateBoards = async (code: AccessCode) => {
+    setCodeFeedback(null);
+    try {
+      await setAccessCodeCanCreateBoards(code.id, !(code.canCreateBoards === true));
+    } catch (err) {
+      setCodeFeedback({
+        kind: 'error',
+        text: err instanceof Error ? err.message : 'Unable to update access code permission.',
       });
     }
   };
@@ -441,7 +480,16 @@ export function AdminPage({
                       />
                     </div>
                   </div>
-                  <div className="flex justify-end">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={allowBoardCreate}
+                        onChange={(e) => setAllowBoardCreate(e.target.checked)}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                      />
+                      <span>Allow creating new boards</span>
+                    </label>
                     <button
                       type="submit"
                       disabled={whitelistBusy || !emailInput.trim()}
@@ -491,6 +539,15 @@ export function AdminPage({
                       <span>{whitelistBusy ? 'Importing...' : 'Import Emails'}</span>
                     </button>
                   </div>
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={allowBoardCreate}
+                      onChange={(e) => setAllowBoardCreate(e.target.checked)}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                    />
+                    <span>Allow imported users to create new boards</span>
+                  </label>
                 </form>
               )}
 
@@ -554,72 +611,85 @@ export function AdminPage({
                       : 'No whitelist entries match your current filter.'}
                   </div>
                 ) : (
-                  filteredWhitelist.map((entry) => (
-                    <div
-                      key={entry.email}
-                      className="px-3.5 py-2.5 flex items-center justify-between gap-3 text-xs hover:bg-slate-50/60 dark:hover:bg-slate-800/30 transition-colors"
-                    >
-                      <div className="min-w-0 space-y-0.5">
-                        <div className="font-mono font-medium text-slate-900 dark:text-slate-100 truncate">
-                          {entry.email}
+                  filteredWhitelist.map((entry) => {
+                    const canCreate = entry.canCreateBoards === true;
+                    return (
+                      <div
+                        key={entry.email}
+                        className="px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs hover:bg-slate-50/60 dark:hover:bg-slate-800/30 transition-colors"
+                      >
+                        <div className="min-w-0 space-y-0.5 flex-1">
+                          <div className="font-mono font-medium text-slate-900 dark:text-slate-100 truncate">
+                            {entry.email}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+                            <span
+                              className={
+                                entry.active
+                                  ? 'font-medium text-emerald-600 dark:text-emerald-400'
+                                  : 'font-medium text-amber-600 dark:text-amber-400'
+                              }
+                            >
+                              {entry.active ? 'Active' : 'Paused'}
+                            </span>
+                            {entry.label && (
+                              <>
+                                <span>·</span>
+                                <span className="truncate">{entry.label}</span>
+                              </>
+                            )}
+                            {entry.inviteCode && (
+                              <>
+                                <span>·</span>
+                                <span className="font-mono">Code: {entry.inviteCode}</span>
+                              </>
+                            )}
+                          </div>
                         </div>
-                        <div className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-slate-500 dark:text-slate-400">
-                          <span
-                            className={
-                              entry.active
-                                ? 'font-medium text-emerald-600 dark:text-emerald-400'
-                                : 'font-medium text-amber-600 dark:text-amber-400'
-                            }
+
+                        <div className="flex flex-wrap items-center gap-3 shrink-0">
+                          <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-700 dark:text-slate-300 cursor-pointer whitespace-nowrap">
+                            <input
+                              type="checkbox"
+                              checked={canCreate}
+                              onChange={() => handleToggleWhitelistCreateBoards(entry)}
+                              className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                            />
+                            <span>Create boards</span>
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={() => handleToggleWhitelistActive(entry)}
+                            className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 whitespace-nowrap"
+                            title={entry.active ? 'Pause access for this user' : 'Resume access'}
                           >
-                            {entry.active ? 'Active' : 'Paused'}
-                          </span>
-                          {entry.label && (
-                            <>
-                              <span>·</span>
-                              <span className="truncate">{entry.label}</span>
-                            </>
-                          )}
-                          {entry.inviteCode && (
-                            <>
-                              <span>·</span>
-                              <span className="font-mono">Code: {entry.inviteCode}</span>
-                            </>
-                          )}
+                            {entry.active ? (
+                              <>
+                                <PauseCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                                <span>Pause</span>
+                              </>
+                            ) : (
+                              <>
+                                <PlayCircle className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                                <span>Resume</span>
+                              </>
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveWhitelist(entry)}
+                            aria-label={`Remove ${entry.email} from whitelist`}
+                            className="inline-flex items-center gap-1 text-red-600 dark:text-red-400 hover:underline whitespace-nowrap"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Remove</span>
+                          </button>
                         </div>
                       </div>
-
-                      <div className="flex items-center gap-2.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleWhitelistActive(entry)}
-                          className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 whitespace-nowrap"
-                          title={entry.active ? 'Pause access for this user' : 'Resume access'}
-                        >
-                          {entry.active ? (
-                            <>
-                              <PauseCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                              <span>Pause</span>
-                            </>
-                          ) : (
-                            <>
-                              <PlayCircle className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                              <span>Resume</span>
-                            </>
-                          )}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveWhitelist(entry)}
-                          aria-label={`Remove ${entry.email} from whitelist`}
-                          className="inline-flex items-center gap-1 text-red-600 dark:text-red-400 hover:underline whitespace-nowrap"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>Remove</span>
-                        </button>
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -695,6 +765,16 @@ export function AdminPage({
                       </button>
                     </div>
                   </div>
+
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={codeAllowBoardCreate}
+                      onChange={(e) => setCodeAllowBoardCreate(e.target.checked)}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                    />
+                    <span>Allow users joining with this code to create boards</span>
+                  </label>
                 </form>
 
                 {/* Active/Paused Access Codes List */}
@@ -733,7 +813,16 @@ export function AdminPage({
                               </div>
                             </div>
 
-                            <div className="flex items-center gap-2 shrink-0">
+                            <div className="flex items-center gap-2.5 shrink-0">
+                              <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-700 dark:text-slate-300 cursor-pointer whitespace-nowrap">
+                                <input
+                                  type="checkbox"
+                                  checked={code.canCreateBoards === true}
+                                  onChange={() => handleToggleCodeCreateBoards(code)}
+                                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                                />
+                                <span>Create boards</span>
+                              </label>
                               <button
                                 type="button"
                                 onClick={() => handleToggleCodeActive(code)}

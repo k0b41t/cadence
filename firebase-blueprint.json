@@ -58,6 +58,10 @@
           "type": "boolean",
           "description": "Whether access is currently active for this email."
         },
+        "canCreateBoards": {
+          "type": "boolean",
+          "description": "Whether this user is permitted to create new Kanban boards."
+        },
         "addedBy": {
           "type": "string",
           "description": "UID of the admin or user who created this whitelist entry.",
@@ -104,6 +108,10 @@
         "active": {
           "type": "boolean",
           "description": "Whether the code can currently be used to join the whitelist."
+        },
+        "canCreateBoards": {
+          "type": "boolean",
+          "description": "Default board creation permission assigned to users who join with this code."
         },
         "createdBy": {
           "type": "string",

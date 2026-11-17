@@ -49,6 +49,7 @@ import {
   subscribeBoardMessages,
   subscribeBoardSubtasks,
   subscribeColumns,
+  subscribeMyWhitelistEntry,
   subscribeTasks,
   subscribeUserProfile,
   toggleSubtaskCompleted,
@@ -88,6 +89,7 @@ function WorkspaceApp() {
   const [user, setUser] = useState<User | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isBootstrapAdmin, setIsBootstrapAdmin] = useState(false);
+  const [canCreateBoards, setCanCreateBoards] = useState(false);
   const [accessStatus, setAccessStatus] = useState<'checking' | 'granted' | 'denied'>('checking');
   const [accessSuspended, setAccessSuspended] = useState(false);
   const [accessGateError, setAccessGateError] = useState<string | null>(null);
@@ -192,10 +194,15 @@ function WorkspaceApp() {
 
     if (!wlStatus.allowed && !wlStatus.suspended && autoRedeemCode) {
       try {
-        await redeemAccessCode(nextUser, autoRedeemCode);
+        const redeemed = await redeemAccessCode(nextUser, autoRedeemCode);
         window.sessionStorage.removeItem('cadence_pending_access');
         setPendingAccessCode(null);
-        wlStatus = { allowed: true, suspended: false, email: wlStatus.email };
+        wlStatus = {
+          allowed: true,
+          suspended: false,
+          canCreateBoards: redeemed.canCreateBoards,
+          email: wlStatus.email,
+        };
       } catch (redeemErr) {
         setAccessGateError(
           redeemErr instanceof Error ? redeemErr.message : 'Unable to redeem access code.'
@@ -209,16 +216,19 @@ function WorkspaceApp() {
     if (!wlStatus.allowed) {
       setIsAdmin(false);
       setIsBootstrapAdmin(false);
+      setCanCreateBoards(false);
       setAccessSuspended(wlStatus.suspended);
       setAccessStatus('denied');
       setWorkspaceReady(false);
       return;
     }
 
-    const ensured = await ensureUserAndStarterWorkspace(nextUser);
+    const effectiveCanCreateBoards = adminStatus.isAdmin || wlStatus.canCreateBoards;
+    const ensured = await ensureUserAndStarterWorkspace(nextUser, effectiveCanCreateBoards);
     setProfile(ensured);
     setIsAdmin(adminStatus.isAdmin);
     setIsBootstrapAdmin(adminStatus.isBootstrapAdmin);
+    setCanCreateBoards(effectiveCanCreateBoards);
     setAccessSuspended(false);
     setAccessGateError(null);
     setAccessStatus('granted');
@@ -247,6 +257,7 @@ function WorkspaceApp() {
       if (!nextUser) {
         setIsAdmin(false);
         setIsBootstrapAdmin(false);
+        setCanCreateBoards(false);
         setAccessStatus('checking');
         setAccessSuspended(false);
         setAccessGateError(null);
@@ -300,6 +311,22 @@ function WorkspaceApp() {
       unsubBoards();
     };
   }, [user, workspaceReady, isBootstrapAdmin]);
+
+  // Keep whitelist status & canCreateBoards permission in sync in real time
+  useEffect(() => {
+    if (!user || !workspaceReady || isAdmin || !user.email) return;
+    const unsubWhitelist = subscribeMyWhitelistEntry(user.email, (entry) => {
+      if (!entry || !entry.active) {
+        setCanCreateBoards(false);
+        setWorkspaceReady(false);
+        setAccessSuspended(Boolean(entry && !entry.active));
+        setAccessStatus('denied');
+        return;
+      }
+      setCanCreateBoards(entry.canCreateBoards === true);
+    });
+    return () => unsubWhitelist();
+  }, [user, workspaceReady, isAdmin]);
 
   // Subscribe to all task chats & tasks across accessible boards for top-bar hubs
   useEffect(() => {
@@ -759,6 +786,7 @@ function WorkspaceApp() {
         profile={profile}
         userEmail={user.email}
         isAdmin={isAdmin}
+        canCreateBoards={isAdmin || canCreateBoards}
         isAdminPageActive={workspacePage === 'admin' && isAdmin}
         mobileOpen={mobileSidebarOpen}
         onCloseMobile={() => setMobileSidebarOpen(false)}
@@ -1047,17 +1075,21 @@ function WorkspaceApp() {
                   No board selected
                 </h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Create a new Kanban board or join a teammate&apos;s shared board with an invite code.
+                  {isAdmin || canCreateBoards
+                    ? "Create a new Kanban board or join a teammate's shared board with an invite link."
+                    : "Join a teammate's shared board with an invite link, or ask an administrator for permission to create boards."}
                 </p>
                 <div className="flex items-center justify-center gap-3 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setBoardModalState({ mode: 'create' })}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Create Board</span>
-                  </button>
+                  {(isAdmin || canCreateBoards) && (
+                    <button
+                      type="button"
+                      onClick={() => setBoardModalState({ mode: 'create' })}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Create Board</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => setJoinModalState({})}
@@ -1192,6 +1224,7 @@ function WorkspaceApp() {
           mode={boardModalState.mode}
           board={boardModalState.board}
           isAdmin={isAdmin}
+          canCreateBoards={isAdmin || canCreateBoards}
           onCreated={handleSelectBoard}
           onDeleted={(deletedId) => {
             if (activeBoardId === deletedId) {
