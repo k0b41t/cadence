@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { signInWithPopup } from 'firebase/auth';
-import { ArrowRight, BookOpen, CheckSquare, Columns3, Moon, Sun } from 'lucide-react';
+import { ArrowRight, BookOpen, CheckSquare, Cog, Columns3, Moon, Sun } from 'lucide-react';
 import { auth, googleProvider } from '../lib/firebase';
 import type { ThemeMode } from '../types/kanban';
 import { DocsModal } from './DocsModal';
@@ -9,9 +9,15 @@ interface SignInViewProps {
   theme: ThemeMode;
   pendingAccessCode?: string | null;
   onToggleTheme: () => void;
+  onOpenThemeSettings: () => void;
 }
 
-export function SignInView({ theme, pendingAccessCode = null, onToggleTheme }: SignInViewProps) {
+export function SignInView({
+  theme,
+  pendingAccessCode = null,
+  onToggleTheme,
+  onOpenThemeSettings,
+}: SignInViewProps) {
   const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [docsOpen, setDocsOpen] = useState(false);
@@ -55,6 +61,15 @@ export function SignInView({ theme, pendingAccessCode = null, onToggleTheme }: S
           >
             <BookOpen className="w-3.5 h-3.5" />
             <span>Docs</span>
+          </button>
+          <button
+            type="button"
+            onClick={onOpenThemeSettings}
+            aria-label="Appearance and color palette settings"
+            title="Appearance & Color Palette"
+            className="p-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 rounded-lg border border-slate-200 dark:border-slate-800 transition-colors"
+          >
+            <Cog className="w-4 h-4" />
           </button>
           <button
             type="button"

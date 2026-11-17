@@ -4,6 +4,7 @@ import {
   Bell,
   BookOpen,
   CalendarDays,
+  Cog,
   Columns3,
   Menu,
   MessageSquare,
@@ -32,7 +33,14 @@ import { ShareBoardModal } from './components/ShareBoardModal';
 import { Sidebar } from './components/Sidebar';
 import { SignInView } from './components/SignInView';
 import { TaskDetailModal } from './components/TaskDetailModal';
+import { ThemeSettingsModal } from './components/ThemeSettingsModal';
 import { auth } from './lib/firebase';
+import {
+  applyPaletteToDocument,
+  loadStoredPalettes,
+  saveStoredPalettes,
+  type AppColorPalettes,
+} from './lib/themePalette';
 import {
   checkIsAdmin,
   checkUserWhitelistAccess,
@@ -131,6 +139,8 @@ function WorkspaceApp() {
     }
     return 'light';
   });
+  const [palettes, setPalettes] = useState<AppColorPalettes>(() => loadStoredPalettes());
+  const [themeSettingsOpen, setThemeSettingsOpen] = useState(false);
 
   // Filters, search & view mode
   const [viewMode, setViewMode] = useState<'board' | 'calendar'>('board');
@@ -172,7 +182,7 @@ function WorkspaceApp() {
   const [draggedTask, setDraggedTask] = useState<Task | null>(null);
   const [dropTarget, setDropTarget] = useState<{ columnId: string; index: number } | null>(null);
 
-  // Sync theme to <html>
+  // Sync theme & active mode color palette to <html>
   useEffect(() => {
     const root = document.documentElement;
     if (theme === 'dark') {
@@ -181,7 +191,8 @@ function WorkspaceApp() {
       root.classList.remove('dark');
     }
     window.localStorage.setItem('cadence_theme', theme);
-  }, [theme]);
+    applyPaletteToDocument(palettes, theme);
+  }, [theme, palettes]);
 
   const verifyAndProvisionUser = async (nextUser: User, autoRedeemCode: string | null) => {
     setAccessStatus('checking');
@@ -558,12 +569,21 @@ function WorkspaceApp() {
     [allTasks, boardMap]
   );
 
-  const handleToggleTheme = async () => {
-    const next: ThemeMode = theme === 'dark' ? 'light' : 'dark';
+  const handleSetTheme = async (next: ThemeMode) => {
     setTheme(next);
     if (user && workspaceReady) {
       await updateUserTheme(user.uid, next);
     }
+  };
+
+  const handleToggleTheme = async () => {
+    const next: ThemeMode = theme === 'dark' ? 'light' : 'dark';
+    await handleSetTheme(next);
+  };
+
+  const handleChangePalettes = (next: AppColorPalettes) => {
+    setPalettes(next);
+    saveStoredPalettes(next);
   };
 
   const handleSelectBoard = async (boardId: string) => {
@@ -703,6 +723,18 @@ function WorkspaceApp() {
     );
   };
 
+  const themeModal = themeSettingsOpen ? (
+    <ThemeSettingsModal
+      activeTheme={theme}
+      palettes={palettes}
+      onChangePalettes={handleChangePalettes}
+      onSwitchTheme={(nextMode) => {
+        void handleSetTheme(nextMode);
+      }}
+      onClose={() => setThemeSettingsOpen(false)}
+    />
+  ) : null;
+
   if (!authReady) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-6">
@@ -713,33 +745,41 @@ function WorkspaceApp() {
 
   if (!user) {
     return (
-      <SignInView
-        theme={theme}
-        pendingAccessCode={pendingAccessCode}
-        onToggleTheme={handleToggleTheme}
-      />
+      <>
+        <SignInView
+          theme={theme}
+          pendingAccessCode={pendingAccessCode}
+          onToggleTheme={handleToggleTheme}
+          onOpenThemeSettings={() => setThemeSettingsOpen(true)}
+        />
+        {themeModal}
+      </>
     );
   }
 
   if (accessStatus === 'denied') {
     return (
-      <AccessDeniedView
-        user={user}
-        suspended={accessSuspended}
-        initialAccessCode={pendingAccessCode}
-        initialError={accessGateError}
-        theme={theme}
-        onToggleTheme={handleToggleTheme}
-        onAccessGranted={async () => {
-          window.sessionStorage.removeItem('cadence_pending_access');
-          setPendingAccessCode(null);
-          await verifyAndProvisionUser(user, null);
-        }}
-        onRecheckAccess={async () => {
-          await verifyAndProvisionUser(user, null);
-        }}
-        onSignOut={handleSignOut}
-      />
+      <>
+        <AccessDeniedView
+          user={user}
+          suspended={accessSuspended}
+          initialAccessCode={pendingAccessCode}
+          initialError={accessGateError}
+          theme={theme}
+          onToggleTheme={handleToggleTheme}
+          onOpenThemeSettings={() => setThemeSettingsOpen(true)}
+          onAccessGranted={async () => {
+            window.sessionStorage.removeItem('cadence_pending_access');
+            setPendingAccessCode(null);
+            await verifyAndProvisionUser(user, null);
+          }}
+          onRecheckAccess={async () => {
+            await verifyAndProvisionUser(user, null);
+          }}
+          onSignOut={handleSignOut}
+        />
+        {themeModal}
+      </>
     );
   }
 
@@ -909,6 +949,16 @@ function WorkspaceApp() {
                 <span className="hidden sm:inline">Board</span>
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={() => setThemeSettingsOpen(true)}
+              aria-label="Appearance and color palette settings"
+              title="Appearance & Color Palette"
+              className="p-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors shrink-0"
+            >
+              <Cog className="w-4 h-4" />
+            </button>
 
             <button
               type="button"
@@ -1328,6 +1378,8 @@ function WorkspaceApp() {
           onClose={() => setEditingColumnId(null)}
         />
       )}
+
+      {themeModal}
     </div>
   );
 }

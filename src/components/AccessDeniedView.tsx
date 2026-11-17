@@ -3,6 +3,7 @@ import type { User } from 'firebase/auth';
 import {
   ArrowRight,
   BookOpen,
+  Cog,
   KeyRound,
   LogOut,
   Moon,
@@ -21,6 +22,7 @@ interface AccessDeniedViewProps {
   initialError?: string | null;
   theme: ThemeMode;
   onToggleTheme: () => void;
+  onOpenThemeSettings: () => void;
   onAccessGranted: () => Promise<void>;
   onRecheckAccess: () => Promise<void>;
   onSignOut: () => Promise<void>;
@@ -33,6 +35,7 @@ export function AccessDeniedView({
   initialError = null,
   theme,
   onToggleTheme,
+  onOpenThemeSettings,
   onAccessGranted,
   onRecheckAccess,
   onSignOut,
@@ -99,6 +102,16 @@ export function AccessDeniedView({
           >
             <BookOpen className="w-3.5 h-3.5" />
             <span>Docs</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenThemeSettings}
+            aria-label="Appearance and color palette settings"
+            title="Appearance & Color Palette"
+            className="p-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 rounded-lg border border-slate-200 dark:border-slate-800 transition-colors"
+          >
+            <Cog className="w-4 h-4" />
           </button>
 
           <button
