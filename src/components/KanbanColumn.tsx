@@ -18,6 +18,7 @@ interface KanbanColumnProps {
   onDragStartTask: (e: DragEvent<HTMLDivElement>, task: Task) => void;
   onDragEndTask: () => void;
   onDragOverColumn: (e: DragEvent<HTMLElement>, columnId: string, index: number) => void;
+  onDragLeaveColumn: (columnId: string) => void;
   onDropOnColumn: (e: DragEvent<HTMLElement>, columnId: string, index: number) => void;
   onSelectTask: (task: Task) => void;
   onToggleTaskComplete: (task: Task) => void;
@@ -82,6 +83,7 @@ export function KanbanColumn({
   onDragStartTask,
   onDragEndTask,
   onDragOverColumn,
+  onDragLeaveColumn,
   onDropOnColumn,
   onSelectTask,
   onToggleTaskComplete,
@@ -95,6 +97,7 @@ export function KanbanColumn({
 
   const isOverWip = column.wipLimit > 0 && tasks.length > column.wipLimit;
   const isAtWip = column.wipLimit > 0 && tasks.length === column.wipLimit;
+  const isDropTargetColumn = Boolean(draggedTaskId && dropTarget?.columnId === column.id);
 
   const activeColorRule = (column.colorRules ?? [])
     .filter((r) => tasks.length >= r.threshold)
@@ -142,11 +145,15 @@ export function KanbanColumn({
       aria-label={column.title}
       style={customStyle}
       onDragOver={(e) => {
-        if (!canEditTasks) return;
+        if (!canEditTasks || !draggedTaskId) return;
         e.preventDefault();
-        if (tasks.length === 0) {
-          onDragOverColumn(e, column.id, 0);
-        }
+        onDragOverColumn(e, column.id, tasks.length);
+      }}
+      onDragLeave={(e) => {
+        if (!canEditTasks) return;
+        const nextTarget = e.relatedTarget as Node | null;
+        if (nextTarget && e.currentTarget.contains(nextTarget)) return;
+        onDragLeaveColumn(column.id);
       }}
       onDrop={(e) => {
         if (!canEditTasks) return;
@@ -155,15 +162,17 @@ export function KanbanColumn({
           dropTarget && dropTarget.columnId === column.id ? dropTarget.index : tasks.length;
         onDropOnColumn(e, column.id, targetIndex);
       }}
-      className={`cadence-kanban-column w-[320px] shrink-0 flex flex-col max-h-full border rounded-xl transition-colors ${
+      className={`cadence-kanban-column w-[320px] shrink-0 flex flex-col max-h-full border rounded-xl transition-all duration-150 ${
         presetStyles
           ? presetStyles.bg
           : customRgb
             ? 'bg-[rgba(var(--col-rgb),0.14)] dark:bg-[rgba(var(--col-rgb),0.22)]'
-            : 'bg-slate-100/80 dark:bg-slate-900/50'
+            : isDropTargetColumn
+              ? 'bg-blue-50/50 dark:bg-blue-950/35'
+              : 'bg-slate-100/80 dark:bg-slate-900/50'
       } ${
-        dropTarget?.columnId === column.id
-          ? 'border-blue-500/70 dark:border-blue-500/60'
+        isDropTargetColumn
+          ? 'border-blue-500 dark:border-blue-400 ring-2 ring-blue-500/85 dark:ring-blue-400/85 shadow-md'
           : presetStyles
             ? presetStyles.border
             : customRgb
@@ -172,7 +181,13 @@ export function KanbanColumn({
       }`}
     >
       {/* Column Header */}
-      <div className="px-3.5 py-3 flex items-center justify-between gap-2 border-b border-slate-200/70 dark:border-slate-800/80 shrink-0">
+      <div
+        className={`px-3.5 py-3 flex items-center justify-between gap-2 border-b shrink-0 transition-colors ${
+          isDropTargetColumn
+            ? 'border-blue-200 dark:border-blue-800/80'
+            : 'border-slate-200/70 dark:border-slate-800/80'
+        }`}
+      >
         <div className="flex items-center gap-2 min-w-0">
           <h2 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
             {column.title}
@@ -190,16 +205,23 @@ export function KanbanColumn({
           </span>
         </div>
 
-        {canManageColumns && (
-          <button
-            type="button"
-            onClick={() => onOpenColumnSettings(column)}
-            aria-label={`Column settings for ${column.title}`}
-            className="p-1.5 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-200/70 dark:hover:bg-slate-800 rounded-md transition-colors shrink-0"
-          >
-            <Settings2 className="w-3.5 h-3.5" />
-          </button>
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {isDropTargetColumn && (
+            <span className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 whitespace-nowrap">
+              Drop target
+            </span>
+          )}
+          {canManageColumns && (
+            <button
+              type="button"
+              onClick={() => onOpenColumnSettings(column)}
+              aria-label={`Column settings for ${column.title}`}
+              className="p-1.5 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-200/70 dark:hover:bg-slate-800 rounded-md transition-colors shrink-0"
+            >
+              <Settings2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
       {isOverWip && (
@@ -213,7 +235,7 @@ export function KanbanColumn({
         {tasks.length === 0 ? (
           <div
             onDragOver={(e) => {
-              if (!canEditTasks) return;
+              if (!canEditTasks || !draggedTaskId) return;
               e.preventDefault();
               e.stopPropagation();
               onDragOverColumn(e, column.id, 0);
@@ -224,23 +246,25 @@ export function KanbanColumn({
               e.stopPropagation();
               onDropOnColumn(e, column.id, 0);
             }}
-            className={`h-24 rounded-lg border border-dashed flex items-center justify-center text-xs transition-colors ${
-              dropTarget?.columnId === column.id
-                ? 'border-blue-500 bg-blue-50/60 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300'
+            className={`h-24 rounded-lg border-2 border-dashed flex items-center justify-center text-xs transition-colors ${
+              isDropTargetColumn
+                ? 'border-blue-500 dark:border-blue-400 bg-blue-50/80 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 font-medium'
                 : 'border-slate-300/80 dark:border-slate-700/80 text-slate-400 dark:text-slate-500'
             }`}
           >
-            {dropTarget?.columnId === column.id ? 'Drop task here' : 'No tasks in this stage'}
+            {isDropTargetColumn ? 'Drop task here' : 'No tasks in this stage'}
           </div>
         ) : (
           tasks.map((task, idx) => {
             const showDropBefore =
-              dropTarget?.columnId === column.id && dropTarget.index === idx;
+              isDropTargetColumn &&
+              dropTarget?.index === idx &&
+              draggedTaskId !== task.id;
             return (
               <div
                 key={task.id}
                 onDragOver={(e) => {
-                  if (!canEditTasks) return;
+                  if (!canEditTasks || !draggedTaskId) return;
                   e.preventDefault();
                   e.stopPropagation();
                   const rect = e.currentTarget.getBoundingClientRect();
@@ -257,7 +281,18 @@ export function KanbanColumn({
                 }}
               >
                 {showDropBefore && (
-                  <div className="h-0.5 bg-blue-600 dark:bg-blue-400 rounded-full mb-2.5" />
+                  <div
+                    aria-hidden="true"
+                    className="relative -mt-1.5 mb-1.5 h-2 flex items-center pointer-events-none"
+                  >
+                    <span className="w-2 h-2 rounded-full bg-blue-600 dark:bg-blue-400 shrink-0" />
+                    <div className="flex-1 h-0.5 bg-blue-600 dark:bg-blue-400" />
+                    <span className="px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white bg-blue-600 dark:bg-blue-500 rounded">
+                      Drop here
+                    </span>
+                    <div className="flex-1 h-0.5 bg-blue-600 dark:bg-blue-400" />
+                    <span className="w-2 h-2 rounded-full bg-blue-600 dark:bg-blue-400 shrink-0" />
+                  </div>
                 )}
                 <TaskCard
                   task={task}
@@ -277,16 +312,21 @@ export function KanbanColumn({
           })
         )}
 
-        {dropTarget?.columnId === column.id &&
-          dropTarget.index === tasks.length &&
+        {isDropTargetColumn &&
+          dropTarget?.index === tasks.length &&
           tasks.length > 0 && (
-            <div className="h-0.5 bg-blue-600 dark:bg-blue-400 rounded-full mt-2.5" />
+            <div
+              aria-hidden="true"
+              className="h-14 rounded-lg border-2 border-dashed border-blue-500 dark:border-blue-400 bg-blue-50/75 dark:bg-blue-950/35 flex items-center justify-center text-xs font-medium text-blue-700 dark:text-blue-300 pointer-events-none"
+            >
+              Drop task here
+            </div>
           )}
 
         {tasks.length > 0 && (
           <div
             onDragOver={(e) => {
-              if (!canEditTasks) return;
+              if (!canEditTasks || !draggedTaskId) return;
               e.preventDefault();
               e.stopPropagation();
               onDragOverColumn(e, column.id, tasks.length);
@@ -297,7 +337,7 @@ export function KanbanColumn({
               e.stopPropagation();
               onDropOnColumn(e, column.id, tasks.length);
             }}
-            className="h-6"
+            className="min-h-10"
           />
         )}
       </div>

@@ -725,6 +725,10 @@ function WorkspaceApp() {
     );
   };
 
+  const handleDragLeaveColumn = (columnId: string) => {
+    setDropTarget((prev) => (prev?.columnId === columnId ? null : prev));
+  };
+
   const handleDropOnColumn = async (
     e: DragEvent<HTMLElement>,
     targetColumnId: string,
@@ -1317,6 +1321,7 @@ function WorkspaceApp() {
                     onDragStartTask={handleDragStartTask}
                     onDragEndTask={handleDragEndTask}
                     onDragOverColumn={handleDragOverColumn}
+                    onDragLeaveColumn={handleDragLeaveColumn}
                     onDropOnColumn={handleDropOnColumn}
                     onSelectTask={(task) => {
                       setTaskModalFocusChat(false);
