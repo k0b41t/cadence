@@ -26,30 +26,45 @@ interface KanbanColumnProps {
   onOpenColumnSettings: (column: Column) => void;
 }
 
-const COLUMN_BG_MAP: Record<PresetColumnBgColor, { bg: string; border: string }> = {
+const COLUMN_BG_MAP: Record<
+  PresetColumnBgColor,
+  { bg: string; border: string; lightBase: string; darkBase: string }
+> = {
   amber: {
     bg: 'bg-amber-50/90 dark:bg-amber-950/35',
     border: 'border-amber-300/90 dark:border-amber-800/70',
+    lightBase: 'var(--color-amber-50, #fffbeb)',
+    darkBase: 'var(--color-amber-950, #451a03)',
   },
   red: {
     bg: 'bg-red-50/90 dark:bg-red-950/35',
     border: 'border-red-300/90 dark:border-red-800/70',
+    lightBase: 'var(--color-red-50, #fef2f2)',
+    darkBase: 'var(--color-red-950, #450a0a)',
   },
   emerald: {
     bg: 'bg-emerald-50/90 dark:bg-emerald-950/30',
     border: 'border-emerald-300/80 dark:border-emerald-800/70',
+    lightBase: 'var(--color-emerald-50, #ecfdf5)',
+    darkBase: 'var(--color-emerald-950, #022c22)',
   },
   blue: {
     bg: 'bg-blue-50/90 dark:bg-blue-950/30',
     border: 'border-blue-300/80 dark:border-blue-800/70',
+    lightBase: 'var(--color-blue-50, #eff6ff)',
+    darkBase: 'var(--color-blue-950, #172554)',
   },
   violet: {
     bg: 'bg-violet-50/90 dark:bg-violet-950/30',
     border: 'border-violet-300/80 dark:border-violet-800/70',
+    lightBase: 'var(--color-violet-50, #f5f3ff)',
+    darkBase: 'var(--color-violet-950, #2e1065)',
   },
   slate: {
     bg: 'bg-slate-200/80 dark:bg-slate-800/70',
     border: 'border-slate-300 dark:border-slate-700',
+    lightBase: 'var(--color-slate-200, #e2e8f0)',
+    darkBase: 'var(--color-slate-800, #1e293b)',
   },
 };
 
@@ -95,9 +110,18 @@ export function KanbanColumn({
       ? parseColumnColorToRgb(activeColorRule.color)
       : null;
 
-  const customStyle = customRgb
-    ? ({ '--col-rgb': `${customRgb.r}, ${customRgb.g}, ${customRgb.b}` } as CSSProperties)
-    : undefined;
+  const customStyle: CSSProperties | undefined = customRgb
+    ? ({
+        '--col-rgb': `${customRgb.r}, ${customRgb.g}, ${customRgb.b}`,
+        '--col-surface-base': `color-mix(in srgb, rgb(${customRgb.r}, ${customRgb.g}, ${customRgb.b}) 24%, var(--color-slate-100, #f1f5f9))`,
+        '--col-surface-base-dark': `color-mix(in srgb, rgb(${customRgb.r}, ${customRgb.g}, ${customRgb.b}) 32%, var(--color-slate-900, #0f172a))`,
+      } as CSSProperties)
+    : presetStyles
+      ? ({
+          '--col-surface-base': presetStyles.lightBase,
+          '--col-surface-base-dark': presetStyles.darkBase,
+        } as CSSProperties)
+      : undefined;
 
   const handleSubmitQuickAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -131,7 +155,7 @@ export function KanbanColumn({
           dropTarget && dropTarget.columnId === column.id ? dropTarget.index : tasks.length;
         onDropOnColumn(e, column.id, targetIndex);
       }}
-      className={`w-[320px] shrink-0 flex flex-col max-h-full border rounded-xl transition-colors ${
+      className={`cadence-kanban-column w-[320px] shrink-0 flex flex-col max-h-full border rounded-xl transition-colors ${
         presetStyles
           ? presetStyles.bg
           : customRgb

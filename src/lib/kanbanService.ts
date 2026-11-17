@@ -1012,18 +1012,47 @@ export async function createBoard(
 export async function updateBoardDetails(
   boardId: string,
   title: string,
-  description: string
+  description: string,
+  appearance?: {
+    backgroundImageUrl?: string;
+    surfaceOpacityEnabled?: boolean;
+    surfaceOpacity?: number;
+  }
 ): Promise<void> {
   assertValidId(boardId, 'boardId');
   const cleanTitle = sanitizeText(title, LIMITS.BOARD_TITLE_MAX);
   if (!cleanTitle) throw new Error('Board title cannot be empty.');
   const path = `boards/${boardId}`;
+
+  const payload: Record<string, unknown> = {
+    title: cleanTitle,
+    description: sanitizeText(description, LIMITS.BOARD_DESC_MAX),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (appearance) {
+    const rawBg = (appearance.backgroundImageUrl ?? '').trim();
+    if (rawBg) {
+      if (rawBg.length > LIMITS.BOARD_BG_URL_MAX || !/^https?:\/\/[^\s]+$/i.test(rawBg)) {
+        throw new Error('Background image URL must start with http:// or https:// and contain no spaces.');
+      }
+      try {
+        new URL(rawBg);
+      } catch {
+        throw new Error('Please enter a valid background image URL.');
+      }
+    }
+    payload.backgroundImageUrl = rawBg;
+    payload.surfaceOpacityEnabled = Boolean(appearance.surfaceOpacityEnabled);
+    const rawOpacity =
+      typeof appearance.surfaceOpacity === 'number' && Number.isFinite(appearance.surfaceOpacity)
+        ? appearance.surfaceOpacity
+        : 80;
+    payload.surfaceOpacity = Math.round(Math.max(0, Math.min(100, rawOpacity)));
+  }
+
   try {
-    await updateDoc(doc(db, 'boards', boardId), {
-      title: cleanTitle,
-      description: sanitizeText(description, LIMITS.BOARD_DESC_MAX),
-      updatedAt: serverTimestamp(),
-    });
+    await updateDoc(doc(db, 'boards', boardId), payload);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }

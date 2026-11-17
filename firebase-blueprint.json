@@ -335,6 +335,19 @@
           "description": "Lifecycle status of the board.",
           "enum": ["active", "archived"]
         },
+        "backgroundImageUrl": {
+          "type": "string",
+          "description": "Optional https/http image URL used as the background for this board only.",
+          "maxLength": 500
+        },
+        "surfaceOpacityEnabled": {
+          "type": "boolean",
+          "description": "Whether column and task card backgrounds use custom translucency to reveal the board background image."
+        },
+        "surfaceOpacity": {
+          "type": "number",
+          "description": "Opacity percentage (0-100) applied to column and task card backgrounds when enabled."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",

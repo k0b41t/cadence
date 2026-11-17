@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type DragEvent } from 'react';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import {
   Bell,
@@ -580,6 +580,16 @@ function WorkspaceApp() {
     [allTasks, boardMap]
   );
 
+  const safeBoardBackgroundUrl = useMemo(() => {
+    const raw = activeBoard?.backgroundImageUrl?.trim();
+    if (!raw || !/^https?:\/\/[^\s]+$/i.test(raw)) return null;
+    try {
+      return new URL(raw).href;
+    } catch {
+      return null;
+    }
+  }, [activeBoard?.backgroundImageUrl]);
+
   const handleSetTheme = async (next: ThemeMode) => {
     setTheme(next);
     if (user && workspaceReady) {
@@ -834,6 +844,20 @@ function WorkspaceApp() {
   }
 
   const isArchived = activeBoard?.status === 'archived';
+
+  const boardOpacityActive = Boolean(activeBoard?.surfaceOpacityEnabled);
+  const boardOpacityPercent =
+    typeof activeBoard?.surfaceOpacity === 'number'
+      ? Math.max(0, Math.min(100, activeBoard.surfaceOpacity))
+      : 80;
+
+  const boardCanvasStyle: CSSProperties | undefined =
+    workspacePage !== 'admin' && activeBoard && viewMode === 'board' && (safeBoardBackgroundUrl || boardOpacityActive)
+      ? ({
+          ...(safeBoardBackgroundUrl ? { '--board-bg-image': `url("${safeBoardBackgroundUrl}")` } : {}),
+          ...(boardOpacityActive ? { '--board-surface-alpha': `${boardOpacityPercent}%` } : {}),
+        } as CSSProperties)
+      : undefined;
 
   return (
     <div className="h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex overflow-hidden">
@@ -1130,10 +1154,15 @@ function WorkspaceApp() {
           />
         ) : (
         <main
+          style={boardCanvasStyle}
           className={`flex-1 p-4 sm:p-6 ${
             activeBoard && viewMode === 'calendar'
               ? 'overflow-hidden flex flex-col'
               : 'overflow-x-auto overflow-y-hidden'
+          } ${
+            activeBoard && viewMode === 'board' && safeBoardBackgroundUrl ? 'board-custom-bg' : ''
+          } ${
+            activeBoard && viewMode === 'board' && boardOpacityActive ? 'board-translucent-surfaces' : ''
           }`}
         >
           {!activeBoard ? (

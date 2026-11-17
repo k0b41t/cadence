@@ -2,7 +2,11 @@ import { useEffect, useState, type CSSProperties } from 'react';
 import { Moon, Palette, RotateCcw, Sun, Type, X } from 'lucide-react';
 import {
   areFontsDefault,
+  BODY_TRACKING_MAX,
+  BODY_TRACKING_MIN,
   DEFAULT_FONT_PREFERENCES,
+  DISPLAY_TRACKING_MAX,
+  DISPLAY_TRACKING_MIN,
   FONT_OPTIONS,
   getFontOption,
   type FontPreferences,
@@ -186,7 +190,7 @@ export function ThemeSettingsModal({
     } else if (fontTarget === 'body') {
       onChangeFonts({ ...fonts, bodyFont: fontId });
     } else {
-      onChangeFonts({ displayFont: fontId, bodyFont: fontId });
+      onChangeFonts({ ...fonts, displayFont: fontId, bodyFont: fontId });
     }
   };
 
@@ -478,6 +482,106 @@ export function ThemeSettingsModal({
                   )}
                 </div>
 
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-4 space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <label
+                          htmlFor="display-letter-spacing"
+                          className="text-xs font-semibold text-slate-900 dark:text-slate-100"
+                        >
+                          Heading Letter Spacing
+                        </label>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                          Helps bolded display headers breathe cleanly.
+                        </p>
+                      </div>
+                      <span className="text-xs font-mono tabular-nums text-slate-700 dark:text-slate-300">
+                        {fonts.displayLetterSpacing > 0 ? '+' : ''}
+                        {fonts.displayLetterSpacing.toFixed(2)}em
+                      </span>
+                    </div>
+
+                    <input
+                      id="display-letter-spacing"
+                      type="range"
+                      min={DISPLAY_TRACKING_MIN}
+                      max={DISPLAY_TRACKING_MAX}
+                      step={0.01}
+                      value={fonts.displayLetterSpacing}
+                      onChange={(e) =>
+                        onChangeFonts({
+                          ...fonts,
+                          displayLetterSpacing: parseFloat(e.target.value),
+                        })
+                      }
+                      className="w-full accent-blue-600 cursor-pointer"
+                    />
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {[
+                        { label: 'Default (0)', value: 0 },
+                        { label: '+0.03em', value: 0.03 },
+                        { label: '+0.06em', value: 0.06 },
+                        { label: '+0.10em', value: 0.1 },
+                        { label: '+0.14em', value: 0.14 },
+                      ].map((preset) => {
+                        const active = Math.abs(fonts.displayLetterSpacing - preset.value) < 0.005;
+                        return (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() =>
+                              onChangeFonts({
+                                ...fonts,
+                                displayLetterSpacing: preset.value,
+                              })
+                            }
+                            className={`px-2 py-1 text-[11px] font-mono tabular-nums rounded-md border transition-colors whitespace-nowrap ${
+                              active
+                                ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300'
+                                : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                            }`}
+                          >
+                            {preset.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label
+                        htmlFor="body-letter-spacing"
+                        className="text-xs font-semibold text-slate-900 dark:text-slate-100"
+                      >
+                        Body Letter Spacing
+                      </label>
+                      <span className="text-xs font-mono tabular-nums text-slate-700 dark:text-slate-300">
+                        {fonts.bodyLetterSpacing > 0 ? '+' : ''}
+                        {fonts.bodyLetterSpacing.toFixed(2)}em
+                      </span>
+                    </div>
+
+                    <input
+                      id="body-letter-spacing"
+                      type="range"
+                      min={BODY_TRACKING_MIN}
+                      max={BODY_TRACKING_MAX}
+                      step={0.01}
+                      value={fonts.bodyLetterSpacing}
+                      onChange={(e) =>
+                        onChangeFonts({
+                          ...fonts,
+                          bodyLetterSpacing: parseFloat(e.target.value),
+                        })
+                      }
+                      className="w-full accent-blue-600 cursor-pointer"
+                    />
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   {FONT_OPTIONS.map((font) => {
                     const isDisplay = fonts.displayFont === font.id;
@@ -503,7 +607,12 @@ export function ThemeSettingsModal({
                         key={font.id}
                         type="button"
                         onClick={() => handleSelectFont(font.id)}
-                        style={{ '--card-font': font.stack } as CSSProperties}
+                        style={
+                          {
+                            '--card-font': font.stack,
+                            '--card-tracking': `${fonts.displayLetterSpacing.toFixed(3)}em`,
+                          } as CSSProperties
+                        }
                         className={`p-3 rounded-lg border text-left transition-colors space-y-1.5 ${
                           isSelectedForTarget || isDisplay || isBody
                             ? 'border-blue-600 bg-blue-50/60 dark:bg-blue-950/35'
@@ -511,7 +620,7 @@ export function ThemeSettingsModal({
                         }`}
                       >
                         <div className="flex items-baseline justify-between gap-2">
-                          <span className="[font-family:var(--card-font)] text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
+                          <span className="[font-family:var(--card-font)] [letter-spacing:var(--card-tracking)] text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
                             {font.label}
                           </span>
                           <span className="text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap shrink-0">
@@ -546,12 +655,14 @@ export function ThemeSettingsModal({
                     '--pv-accent': currentModePalette.accent,
                     '--pv-display-font': activeDisplayOption.stack,
                     '--pv-body-font': activeBodyOption.stack,
+                    '--pv-display-tracking': `${fonts.displayLetterSpacing.toFixed(3)}em`,
+                    '--pv-body-tracking': `${fonts.bodyLetterSpacing.toFixed(3)}em`,
                   } as CSSProperties
                 }
-                className="[font-family:var(--pv-body-font)] rounded-xl border border-[color:var(--pv-border)] bg-[color:var(--pv-canvas)] p-4 space-y-3"
+                className="[font-family:var(--pv-body-font)] [letter-spacing:var(--pv-body-tracking)] rounded-xl border border-[color:var(--pv-border)] bg-[color:var(--pv-canvas)] p-4 space-y-3"
               >
                 <div className="flex items-center justify-between gap-2 pb-2 border-b border-[color:var(--pv-border)]">
-                  <span className="[font-family:var(--pv-display-font)] text-sm font-semibold text-[color:var(--pv-text)] truncate">
+                  <span className="[font-family:var(--pv-display-font)] [letter-spacing:var(--pv-display-tracking)] text-sm font-bold text-[color:var(--pv-text)] truncate">
                     Sprint Board
                   </span>
                   <span className="px-2.5 py-1 text-[11px] font-semibold text-white bg-[color:var(--pv-accent)] rounded-md whitespace-nowrap shrink-0">
@@ -560,8 +671,10 @@ export function ThemeSettingsModal({
                 </div>
 
                 <div className="rounded-lg border border-[color:var(--pv-border)] bg-[color:var(--pv-subtle)] p-2.5 space-y-2">
-                  <div className="flex items-center justify-between text-xs font-semibold text-[color:var(--pv-text)]">
-                    <span className="[font-family:var(--pv-display-font)]">In Progress</span>
+                  <div className="flex items-center justify-between text-xs font-bold text-[color:var(--pv-text)]">
+                    <span className="[font-family:var(--pv-display-font)] [letter-spacing:var(--pv-display-tracking)]">
+                      In Progress
+                    </span>
                     <span className="font-mono tabular-nums text-[color:var(--pv-muted)]">2/4</span>
                   </div>
                   <div className="rounded-md border border-[color:var(--pv-border)] bg-[color:var(--pv-surface)] p-2.5 space-y-1">
@@ -580,12 +693,18 @@ export function ThemeSettingsModal({
                   <span className="text-slate-600 dark:text-slate-400">Headings</span>
                   <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
                     {activeDisplayOption.label}
+                    {Math.abs(fonts.displayLetterSpacing) >= 0.001
+                      ? ` (${fonts.displayLetterSpacing > 0 ? '+' : ''}${fonts.displayLetterSpacing.toFixed(2)}em)`
+                      : ''}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-slate-600 dark:text-slate-400">Body text</span>
                   <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
                     {activeBodyOption.label}
+                    {Math.abs(fonts.bodyLetterSpacing) >= 0.001
+                      ? ` (${fonts.bodyLetterSpacing > 0 ? '+' : ''}${fonts.bodyLetterSpacing.toFixed(2)}em)`
+                      : ''}
                   </span>
                 </div>
                 <div className="pt-1 border-t border-slate-200/80 dark:border-slate-800/80 flex items-center justify-between">

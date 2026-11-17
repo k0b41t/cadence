@@ -83,7 +83,7 @@ export function TaskCard({
           onClick(task);
         }
       }}
-      className={`group bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 text-left transition-all duration-150 cursor-pointer hover:border-slate-300 dark:hover:border-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 ${
+      className={`cadence-task-card group bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 text-left transition-all duration-150 cursor-pointer hover:border-slate-300 dark:hover:border-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 ${
         isDragging ? 'opacity-40 scale-[0.99]' : 'opacity-100'
       }`}
     >

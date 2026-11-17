@@ -16,6 +16,7 @@ export const LIMITS = {
   USER_EMAIL_MAX: 254,
   BOARD_TITLE_MAX: 80,
   BOARD_DESC_MAX: 300,
+  BOARD_BG_URL_MAX: 500,
   COLUMN_TITLE_MAX: 50,
   COLUMN_WIP_MAX: 100,
   COLUMN_COLOR_RULES_MAX: 6,
@@ -180,6 +181,9 @@ export interface Board {
   title: string;
   description: string;
   status: BoardStatus;
+  backgroundImageUrl?: string;
+  surfaceOpacityEnabled?: boolean;
+  surfaceOpacity?: number;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }

@@ -214,6 +214,12 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidBoardBgUrl(url) {
+      return url is string
+        && url.size() <= 500
+        && (url == '' || (url.size() >= 8 && url.matches('^https?://[^\\s]+$')));
+    }
+
     function isValidBoard(data, boardId) {
       return data.id is string && data.id == boardId && isValidId(data.id)
         && data.ownerId is string && isValidId(data.ownerId)
@@ -221,6 +227,9 @@ service cloud.firestore {
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 80
         && data.description is string && data.description.size() <= 300
         && data.status in ['active', 'archived']
+        && (!('backgroundImageUrl' in data) || isValidBoardBgUrl(data.backgroundImageUrl))
+        && (!('surfaceOpacityEnabled' in data) || data.surfaceOpacityEnabled is bool)
+        && (!('surfaceOpacity' in data) || (data.surfaceOpacity is number && data.surfaceOpacity >= 0 && data.surfaceOpacity <= 100))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -631,7 +640,7 @@ service cloud.firestore {
       allow create: if canUserCreateBoards()
         && isValidId(boardId)
         && incoming().keys().hasAll(['id', 'ownerId', 'title', 'description', 'status', 'createdAt', 'updatedAt'])
-        && incoming().keys().hasOnly(['id', 'ownerId', 'ownerDisplayName', 'title', 'description', 'status', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['id', 'ownerId', 'ownerDisplayName', 'title', 'description', 'status', 'backgroundImageUrl', 'surfaceOpacityEnabled', 'surfaceOpacity', 'createdAt', 'updatedAt'])
         && isValidBoard(incoming(), boardId)
         && incoming().ownerId == request.auth.uid
         && incoming().status == 'active'
@@ -652,7 +661,7 @@ service cloud.firestore {
             && existing().ownerId == request.auth.uid
             && (
               (incoming().status == 'archived' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
-              (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'updatedAt'])) ||
+              (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'backgroundImageUrl', 'surfaceOpacityEnabled', 'surfaceOpacity', 'updatedAt'])) ||
               (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['ownerDisplayName', 'updatedAt']))
             )
           )

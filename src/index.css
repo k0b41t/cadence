@@ -70,6 +70,57 @@
   html:not(.dark) .hover\:bg-white:hover {
     background-color: var(--cadence-surface-white, #ffffff);
   }
+
+  html[data-custom-display-tracking='true'] h1,
+  html[data-custom-display-tracking='true'] h2,
+  html[data-custom-display-tracking='true'] h3,
+  html[data-custom-display-tracking='true'] h4,
+  html[data-custom-display-tracking='true'] .font-display {
+    letter-spacing: var(--font-display-tracking, 0em);
+  }
+
+  html[data-custom-body-tracking='true'] body {
+    letter-spacing: var(--font-body-tracking, 0em);
+  }
+
+  .board-custom-bg {
+    background-image: var(--board-bg-image);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+  }
+
+  html:not(.dark) .board-translucent-surfaces .cadence-kanban-column {
+    background-color: color-mix(
+      in srgb,
+      var(--col-surface-base, var(--color-slate-100, #f1f5f9)) var(--board-surface-alpha, 100%),
+      transparent
+    );
+  }
+
+  html.dark .board-translucent-surfaces .cadence-kanban-column {
+    background-color: color-mix(
+      in srgb,
+      var(--col-surface-base-dark, var(--color-slate-900, #0f172a)) var(--board-surface-alpha, 100%),
+      transparent
+    );
+  }
+
+  html:not(.dark) .board-translucent-surfaces .cadence-task-card {
+    background-color: color-mix(
+      in srgb,
+      var(--cadence-surface-white, #ffffff) var(--board-surface-alpha, 100%),
+      transparent
+    );
+  }
+
+  html.dark .board-translucent-surfaces .cadence-task-card {
+    background-color: color-mix(
+      in srgb,
+      var(--color-slate-900, #0f172a) var(--board-surface-alpha, 100%),
+      transparent
+    );
+  }
 }
 
 .tabular-nums {

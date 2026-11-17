@@ -9,6 +9,8 @@ export interface FontOption {
 export interface FontPreferences {
   displayFont: string;
   bodyFont: string;
+  displayLetterSpacing: number;
+  bodyLetterSpacing: number;
 }
 
 export const FONT_STORAGE_KEY = 'cadence_font_preferences_v1';
@@ -16,7 +18,14 @@ export const FONT_STORAGE_KEY = 'cadence_font_preferences_v1';
 export const DEFAULT_FONT_PREFERENCES: FontPreferences = {
   displayFont: 'plus-jakarta-sans',
   bodyFont: 'dm-sans',
+  displayLetterSpacing: 0,
+  bodyLetterSpacing: 0,
 };
+
+export const DISPLAY_TRACKING_MIN = -0.02;
+export const DISPLAY_TRACKING_MAX = 0.2;
+export const BODY_TRACKING_MIN = -0.01;
+export const BODY_TRACKING_MAX = 0.12;
 
 export const FONT_OPTIONS: FontOption[] = [
   {
@@ -107,6 +116,11 @@ export const FONT_OPTIONS: FontOption[] = [
 
 const VALID_FONT_IDS = new Set(FONT_OPTIONS.map((f) => f.id));
 
+function clampTracking(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.round(Math.max(min, Math.min(max, value)) * 1000) / 1000;
+}
+
 export function getFontOption(id: string | undefined, fallbackId: string): FontOption {
   const target = id && VALID_FONT_IDS.has(id) ? id : fallbackId;
   return FONT_OPTIONS.find((f) => f.id === target) ?? FONT_OPTIONS[0];
@@ -127,6 +141,18 @@ export function loadStoredFonts(): FontPreferences {
         parsed.bodyFont && VALID_FONT_IDS.has(parsed.bodyFont)
           ? parsed.bodyFont
           : DEFAULT_FONT_PREFERENCES.bodyFont,
+      displayLetterSpacing: clampTracking(
+        parsed.displayLetterSpacing,
+        DISPLAY_TRACKING_MIN,
+        DISPLAY_TRACKING_MAX,
+        DEFAULT_FONT_PREFERENCES.displayLetterSpacing
+      ),
+      bodyLetterSpacing: clampTracking(
+        parsed.bodyLetterSpacing,
+        BODY_TRACKING_MIN,
+        BODY_TRACKING_MAX,
+        DEFAULT_FONT_PREFERENCES.bodyLetterSpacing
+      ),
     };
   } catch {
     return DEFAULT_FONT_PREFERENCES;
@@ -145,7 +171,9 @@ export function saveStoredFonts(fonts: FontPreferences): void {
 export function areFontsDefault(fonts: FontPreferences): boolean {
   return (
     fonts.displayFont === DEFAULT_FONT_PREFERENCES.displayFont &&
-    fonts.bodyFont === DEFAULT_FONT_PREFERENCES.bodyFont
+    fonts.bodyFont === DEFAULT_FONT_PREFERENCES.bodyFont &&
+    Math.abs(fonts.displayLetterSpacing) < 0.001 &&
+    Math.abs(fonts.bodyLetterSpacing) < 0.001
   );
 }
 
@@ -165,5 +193,21 @@ export function applyFontsToDocument(fonts: FontPreferences): void {
   } else {
     const bodyOpt = getFontOption(fonts.bodyFont, DEFAULT_FONT_PREFERENCES.bodyFont);
     root.style.setProperty('--font-sans', bodyOpt.stack);
+  }
+
+  if (Math.abs(fonts.displayLetterSpacing) >= 0.001) {
+    root.setAttribute('data-custom-display-tracking', 'true');
+    root.style.setProperty('--font-display-tracking', `${fonts.displayLetterSpacing.toFixed(3)}em`);
+  } else {
+    root.removeAttribute('data-custom-display-tracking');
+    root.style.removeProperty('--font-display-tracking');
+  }
+
+  if (Math.abs(fonts.bodyLetterSpacing) >= 0.001) {
+    root.setAttribute('data-custom-body-tracking', 'true');
+    root.style.setProperty('--font-body-tracking', `${fonts.bodyLetterSpacing.toFixed(3)}em`);
+  } else {
+    root.removeAttribute('data-custom-body-tracking');
+    root.style.removeProperty('--font-body-tracking');
   }
 }
