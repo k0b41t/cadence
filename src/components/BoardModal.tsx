@@ -1,12 +1,24 @@
-import { useEffect, useState, type CSSProperties } from 'react';
-import { Archive, Image as ImageIcon, Trash2, X } from 'lucide-react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { Archive, Download, FileUp, Image as ImageIcon, Trash2, Upload, X } from 'lucide-react';
+import { exportBoardToFile, type BoardExportFormat } from '../lib/boardExport';
+import { parseImportedBoardFile, type ParsedImportedBoard } from '../lib/boardImport';
 import {
   archiveBoard,
   createBoard,
   deleteBoard,
+  importBoardFromParsed,
   updateBoardDetails,
 } from '../lib/kanbanService';
-import { BOARD_TEMPLATES, LIMITS, type Board, type BoardTemplate } from '../types/kanban';
+import {
+  BOARD_TEMPLATES,
+  LIMITS,
+  type Board,
+  type BoardTemplate,
+  type Column,
+  type Subtask,
+  type Task,
+  type TaskMessage,
+} from '../types/kanban';
 
 interface BoardModalProps {
   uid: string;
@@ -15,6 +27,11 @@ interface BoardModalProps {
   board?: Board;
   isAdmin: boolean;
   canCreateBoards: boolean;
+  columns?: Column[];
+  tasks?: Task[];
+  subtasksByTask?: Record<string, Subtask[]>;
+  messages?: TaskMessage[];
+  assigneeNames?: Record<string, string>;
   onCreated: (boardId: string) => void;
   onDeleted: (deletedBoardId: string) => void;
   onClose: () => void;
@@ -30,6 +47,12 @@ function getSafePreviewUrl(raw: string): string | null {
   }
 }
 
+const SOURCE_FORMAT_LABELS: Record<ParsedImportedBoard['sourceFormat'], string> = {
+  'cadence-json': 'Cadence JSON',
+  'trello-json': 'Trello JSON',
+  csv: 'CSV Spreadsheet',
+};
+
 export function BoardModal({
   uid,
   ownerDisplayName,
@@ -37,10 +60,16 @@ export function BoardModal({
   board,
   isAdmin,
   canCreateBoards,
+  columns = [],
+  tasks = [],
+  subtasksByTask = {},
+  messages = [],
+  assigneeNames = {},
   onCreated,
   onDeleted,
   onClose,
 }: BoardModalProps) {
+  const [createTab, setCreateTab] = useState<'template' | 'import'>('template');
   const [title, setTitle] = useState(mode === 'edit' && board ? board.title : '');
   const [description, setDescription] = useState(
     mode === 'edit' && board ? board.description : ''
@@ -59,6 +88,13 @@ export function BoardModal({
   const [previewLoadError, setPreviewLoadError] = useState(false);
 
   const [template, setTemplate] = useState<BoardTemplate>('standard');
+  const [importedBoard, setImportedBoard] = useState<ParsedImportedBoard | null>(null);
+  const [importedFileName, setImportedFileName] = useState<string>('');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [exportFormat, setExportFormat] = useState<BoardExportFormat>('json');
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+
   const [submitting, setSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -78,9 +114,62 @@ export function BoardModal({
     return () => window.removeEventListener('keydown', handleKey);
   }, [onClose]);
 
+  const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setErrorMsg(null);
+
+    try {
+      const text = await file.text();
+      const parsed = parseImportedBoardFile(file.name, text);
+      setImportedBoard(parsed);
+      setImportedFileName(file.name);
+      setTitle(parsed.title);
+      setDescription(parsed.description);
+    } catch (err) {
+      setImportedBoard(null);
+      setImportedFileName('');
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to parse imported file.');
+    } finally {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || submitting || !canEditBoard) return;
+    if (submitting || !canEditBoard) return;
+
+    if (mode === 'create' && createTab === 'import') {
+      if (!importedBoard) {
+        setErrorMsg('Choose a JSON or CSV export file to import.');
+        return;
+      }
+      if (!title.trim()) {
+        setErrorMsg('Board name cannot be empty.');
+        return;
+      }
+      setSubmitting(true);
+      setErrorMsg(null);
+      try {
+        const newId = await importBoardFromParsed(
+          uid,
+          importedBoard,
+          title,
+          description,
+          ownerDisplayName
+        );
+        onCreated(newId);
+        onClose();
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : 'Unable to import Board.');
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    if (!title.trim()) return;
     setSubmitting(true);
     setErrorMsg(null);
 
@@ -98,9 +187,26 @@ export function BoardModal({
         onClose();
       }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to save board.');
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to save Board.');
       setSubmitting(false);
     }
+  };
+
+  const handleExport = () => {
+    if (!board) return;
+    setErrorMsg(null);
+    const filename = exportBoardToFile(
+      {
+        board,
+        columns,
+        tasks,
+        subtasksByTask,
+        messages,
+        assigneeNames,
+      },
+      exportFormat
+    );
+    setExportNotice(`Downloaded ${filename}`);
   };
 
   const handleArchive = async () => {
@@ -110,7 +216,7 @@ export function BoardModal({
       await archiveBoard(board.id);
       onClose();
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to archive board.');
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to archive Board.');
       setSubmitting(false);
     }
   };
@@ -123,7 +229,7 @@ export function BoardModal({
       onDeleted(board.id);
       onClose();
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to delete board.');
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to delete Board.');
       setSubmitting(false);
     }
   };
@@ -161,41 +267,143 @@ export function BoardModal({
             </div>
           )}
 
-          <div className="space-y-1.5">
-            <label htmlFor="board-title-input" className="block text-xs font-medium text-slate-600 dark:text-slate-400">
-              Board Name
-            </label>
-            <input
-              id="board-title-input"
-              type="text"
-              autoFocus
-              required
-              disabled={!canEditBoard}
-              maxLength={LIMITS.BOARD_TITLE_MAX}
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. Mobile App v2"
-              className="w-full px-3.5 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:opacity-60"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="board-desc-input" className="block text-xs font-medium text-slate-600 dark:text-slate-400">
-              Description
-            </label>
-            <textarea
-              id="board-desc-input"
-              rows={2}
-              disabled={!canEditBoard}
-              maxLength={LIMITS.BOARD_DESC_MAX}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Optional scope or team goals..."
-              className="w-full px-3.5 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:opacity-60"
-            />
-          </div>
-
           {mode === 'create' && (
+            <div
+              role="tablist"
+              aria-label="Board creation mode"
+              className="grid grid-cols-2 gap-1 p-1 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={createTab === 'template'}
+                onClick={() => {
+                  setCreateTab('template');
+                  setErrorMsg(null);
+                }}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                  createTab === 'template'
+                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                }`}
+              >
+                New Board
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={createTab === 'import'}
+                onClick={() => {
+                  setCreateTab('import');
+                  setErrorMsg(null);
+                }}
+                className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                  createTab === 'import'
+                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                }`}
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Import Board</span>
+              </button>
+            </div>
+          )}
+
+          {mode === 'create' && createTab === 'import' && (
+            <div className="space-y-3">
+              <input
+                ref={fileInputRef}
+                id="board-import-file-input"
+                type="file"
+                accept=".json,.csv,application/json,text/csv"
+                onChange={handleImportFileChange}
+                className="sr-only"
+              />
+
+              {!importedBoard ? (
+                <label
+                  htmlFor="board-import-file-input"
+                  className="flex flex-col items-center justify-center gap-2 p-5 border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-blue-500 dark:hover:border-blue-400 rounded-xl bg-slate-50/70 dark:bg-slate-950/40 cursor-pointer transition-colors text-center"
+                >
+                  <FileUp className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                  <div className="space-y-0.5">
+                    <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                      Choose a Board Export File
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Supports Cadence JSON, Trello JSON, and CSV exports.
+                    </div>
+                  </div>
+                </label>
+              ) : (
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 p-3.5 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
+                        {importedFileName}
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                        {SOURCE_FORMAT_LABELS[importedBoard.sourceFormat]} ·{' '}
+                        {importedBoard.summary.columnCount}{' '}
+                        {importedBoard.summary.columnCount === 1 ? 'column' : 'columns'} ·{' '}
+                        {importedBoard.summary.taskCount}{' '}
+                        {importedBoard.summary.taskCount === 1 ? 'task' : 'tasks'}
+                        {importedBoard.summary.subtaskCount > 0
+                          ? ` · ${importedBoard.summary.subtaskCount} checklist items`
+                          : ''}
+                      </div>
+                    </div>
+                    <label
+                      htmlFor="board-import-file-input"
+                      className="px-2.5 py-1 text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded-md cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      Change file
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {(mode === 'edit' || createTab === 'template' || importedBoard) && (
+            <>
+              <div className="space-y-1.5">
+                <label htmlFor="board-title-input" className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+                  Board Name
+                </label>
+                <input
+                  id="board-title-input"
+                  type="text"
+                  autoFocus={createTab === 'template'}
+                  required
+                  disabled={!canEditBoard}
+                  maxLength={LIMITS.BOARD_TITLE_MAX}
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="e.g. Mobile App v2"
+                  className="w-full px-3.5 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:opacity-60"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label htmlFor="board-desc-input" className="block text-xs font-medium text-slate-600 dark:text-slate-400">
+                  Description
+                </label>
+                <textarea
+                  id="board-desc-input"
+                  rows={2}
+                  disabled={!canEditBoard}
+                  maxLength={LIMITS.BOARD_DESC_MAX}
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="Optional scope or team goals..."
+                  className="w-full px-3.5 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:opacity-60"
+                />
+              </div>
+            </>
+          )}
+
+          {mode === 'create' && createTab === 'template' && (
             <div className="space-y-1.5">
               <label htmlFor="board-template-select" className="block text-xs font-medium text-slate-600 dark:text-slate-400">
                 Column Template
@@ -295,7 +503,7 @@ export function BoardModal({
                       htmlFor="board-surface-opacity-slider"
                       className="font-medium text-slate-700 dark:text-slate-300"
                     >
-                      Background opacity
+                      Background Opacity
                     </label>
                     <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300">
                       {surfaceOpacity}%
@@ -360,52 +568,84 @@ export function BoardModal({
             </div>
           )}
 
-          {mode === 'edit' && board && (isAdmin || board.ownerId === uid) && (
+          {mode === 'edit' && board && (
             <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
-              {!isArchived && (
-                <button
-                  type="button"
-                  onClick={handleArchive}
-                  disabled={submitting}
-                  className="w-full flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-medium text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100 dark:hover:bg-amber-950/50 border border-amber-200 dark:border-amber-900 rounded-lg transition-colors"
-                >
-                  <Archive className="w-3.5 h-3.5" />
-                  <span>Archive board (read-only)</span>
-                </button>
-              )}
-
-              {confirmDelete ? (
-                <div className="flex items-center justify-between gap-2 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-lg p-3">
-                  <span className="text-xs font-medium text-red-700 dark:text-red-300">
-                    Delete board and all tasks?
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleDelete}
-                      disabled={submitting}
-                      className="px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded"
-                    >
-                      Delete
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDelete(false)}
-                      className="px-2 py-1 text-xs text-slate-600 dark:text-slate-400"
-                    >
-                      Cancel
-                    </button>
-                  </div>
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <select
+                    aria-label="Export format"
+                    value={exportFormat}
+                    onChange={(e) => setExportFormat(e.target.value as BoardExportFormat)}
+                    className="px-3 py-2 text-xs bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  >
+                    <option value="json">JSON (Full Backup)</option>
+                    <option value="csv">CSV (Spreadsheet)</option>
+                    <option value="markdown">Markdown (Summary)</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleExport}
+                    className="flex-1 flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-slate-950/60 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    <Download className="w-3.5 h-3.5 shrink-0" />
+                    <span>Export Board</span>
+                  </button>
                 </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmDelete(true)}
-                  className="w-full flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 border border-red-200 dark:border-red-900/60 rounded-lg transition-colors"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>Delete board permanently</span>
-                </button>
+                {exportNotice && (
+                  <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
+                    {exportNotice}
+                  </p>
+                )}
+              </div>
+
+              {(isAdmin || board.ownerId === uid) && (
+                <>
+                  {!isArchived && (
+                    <button
+                      type="button"
+                      onClick={handleArchive}
+                      disabled={submitting}
+                      className="w-full flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-medium text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100 dark:hover:bg-amber-950/50 border border-amber-200 dark:border-amber-900 rounded-lg transition-colors"
+                    >
+                      <Archive className="w-3.5 h-3.5" />
+                      <span>Archive Board (read-only)</span>
+                    </button>
+                  )}
+
+                  {confirmDelete ? (
+                    <div className="flex items-center justify-between gap-2 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-lg p-3">
+                      <span className="text-xs font-medium text-red-700 dark:text-red-300">
+                        Delete Board and all tasks?
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleDelete}
+                          disabled={submitting}
+                          className="px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded"
+                        >
+                          Delete
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDelete(false)}
+                          className="px-2 py-1 text-xs text-slate-600 dark:text-slate-400"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDelete(true)}
+                      className="w-full flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 border border-red-200 dark:border-red-900/60 rounded-lg transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Board permanently</span>
+                    </button>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -421,10 +661,22 @@ export function BoardModal({
             {canEditBoard && (
               <button
                 type="submit"
-                disabled={submitting || !title.trim()}
+                disabled={
+                  submitting ||
+                  !title.trim() ||
+                  (mode === 'create' && createTab === 'import' && !importedBoard)
+                }
                 className="px-4 py-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap"
               >
-                {submitting ? 'Saving...' : mode === 'create' ? 'Create board' : 'Save changes'}
+                {submitting
+                  ? mode === 'create' && createTab === 'import'
+                    ? 'Importing...'
+                    : 'Saving...'
+                  : mode === 'create'
+                    ? createTab === 'import'
+                      ? 'Import Board'
+                      : 'Create Board'
+                    : 'Save changes'}
               </button>
             )}
           </div>
@@ -433,3 +685,4 @@ export function BoardModal({
     </div>
   );
 }
+

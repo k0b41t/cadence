@@ -991,8 +991,8 @@ function WorkspaceApp() {
               <button
                 type="button"
                 onClick={() => setBoardModalState({ mode: 'edit', board: activeBoard })}
-                aria-label="Board settings"
-                title="Board settings"
+                aria-label="Board Settings"
+                title="Board Settings"
                 className="p-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors shrink-0"
               >
                 <Settings className="w-4 h-4" />
@@ -1254,7 +1254,7 @@ function WorkspaceApp() {
             <div className="h-full flex items-center justify-center">
               <div className="max-w-sm text-center space-y-3">
                 <h2 className="font-display text-lg font-semibold text-slate-900 dark:text-slate-100">
-                  No board selected
+                  No Board Selected
                 </h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">
                   {isAdmin || canCreateBoards
@@ -1408,6 +1408,11 @@ function WorkspaceApp() {
           board={boardModalState.board}
           isAdmin={isAdmin}
           canCreateBoards={isAdmin || canCreateBoards}
+          columns={boardModalState.mode === 'edit' ? columns : undefined}
+          tasks={boardModalState.mode === 'edit' ? tasks : undefined}
+          subtasksByTask={boardModalState.mode === 'edit' ? subtasksByTask : undefined}
+          messages={boardModalState.mode === 'edit' ? boardMessages : undefined}
+          assigneeNames={boardModalState.mode === 'edit' ? assigneeNameMap : undefined}
           onCreated={handleSelectBoard}
           onDeleted={(deletedId) => {
             if (activeBoardId === deletedId) {

@@ -140,7 +140,7 @@ export function JoinBoardModal({
               disabled={joining || !rawCode.trim()}
               className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap"
             >
-              {joining ? 'Joining...' : 'Join board'}
+              {joining ? 'Joining...' : 'Join Board'}
             </button>
           </div>
         </form>

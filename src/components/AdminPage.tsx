@@ -655,7 +655,7 @@ export function AdminPage({
                               onChange={() => handleToggleWhitelistCreateBoards(entry)}
                               className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
                             />
-                            <span>Create boards</span>
+                            <span>Create Boards</span>
                           </label>
 
                           <button
@@ -821,7 +821,7 @@ export function AdminPage({
                                   onChange={() => handleToggleCodeCreateBoards(code)}
                                   className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
                                 />
-                                <span>Create boards</span>
+                                <span>Create Boards</span>
                               </label>
                               <button
                                 type="button"

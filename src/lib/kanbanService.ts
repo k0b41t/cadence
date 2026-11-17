@@ -14,6 +14,7 @@ import {
   writeBatch,
   type Unsubscribe,
 } from 'firebase/firestore';
+import type { ParsedImportedBoard } from './boardImport';
 import { isValidColumnColorValue, normalizeColumnColorValue } from './colorUtils';
 import { db, handleFirestoreError, OperationType } from './firebase';
 import {
@@ -1004,6 +1005,218 @@ export async function createBoard(
       await taskBatch.commit();
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `boards/${boardId}/tasks`);
+    }
+  }
+
+  return boardId;
+}
+
+export async function importBoardFromParsed(
+  uid: string,
+  parsed: ParsedImportedBoard,
+  overrideTitle?: string,
+  overrideDescription?: string,
+  ownerDisplayName?: string
+): Promise<string> {
+  assertValidId(uid, 'userId');
+  const cleanTitle = sanitizeText(
+    overrideTitle !== undefined ? overrideTitle : parsed.title,
+    LIMITS.BOARD_TITLE_MAX
+  );
+  if (!cleanTitle) throw new Error('Board title cannot be empty.');
+  const cleanDescription = sanitizeText(
+    overrideDescription !== undefined ? overrideDescription : parsed.description,
+    LIMITS.BOARD_DESC_MAX
+  );
+  const cleanOwnerName = ownerDisplayName
+    ? sanitizeText(ownerDisplayName, LIMITS.USER_DISPLAY_NAME_MAX)
+    : '';
+
+  const boardId = generateId('brd');
+  const boardPath = `boards/${boardId}`;
+
+  const sanitizedCustomRoles = parsed.customRoles
+    .slice(0, LIMITS.BOARD_CUSTOM_ROLES_MAX)
+    .map((cr, idx) => ({
+      id: cr.id && ID_REGEX.test(cr.id) ? cr.id.slice(0, LIMITS.ID_MAX) : `role_${idx}_${Date.now().toString(36)}`,
+      name: sanitizeText(cr.name, LIMITS.CUSTOM_ROLE_NAME_MAX) || `Role ${idx + 1}`,
+      canCreateTasks: Boolean(cr.canCreateTasks),
+      canEditTasks: Boolean(cr.canEditTasks),
+      canDeleteTasks: Boolean(cr.canDeleteTasks),
+      canManageColumns: Boolean(cr.canManageColumns),
+    }));
+
+  const boardPayload: Record<string, unknown> = {
+    id: boardId,
+    ownerId: uid,
+    title: cleanTitle,
+    description: cleanDescription,
+    status: 'active',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (cleanOwnerName) {
+    boardPayload.ownerDisplayName = cleanOwnerName;
+  }
+  if (sanitizedCustomRoles.length > 0) {
+    boardPayload.customRoles = sanitizedCustomRoles;
+  }
+
+  try {
+    await setDoc(doc(db, 'boards', boardId), boardPayload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, boardPath);
+  }
+
+  const columnsToCreate =
+    parsed.columns.length > 0
+      ? parsed.columns
+      : [{ title: 'To Do', wipLimit: 0, tasks: [] }];
+
+  // Commit columns in chunks (<= 400 per batch) before tasks
+  const colIdByIndex: string[] = [];
+  const BATCH_LIMIT = 400;
+
+  for (let start = 0; start < columnsToCreate.length; start += BATCH_LIMIT) {
+    const chunk = columnsToCreate.slice(start, start + BATCH_LIMIT);
+    const colBatch = writeBatch(db);
+    chunk.forEach((col, offset) => {
+      const idx = start + offset;
+      const colId = generateId('col');
+      colIdByIndex[idx] = colId;
+      colBatch.set(doc(db, 'boards', boardId, 'columns', colId), {
+        id: colId,
+        boardId,
+        ownerId: uid,
+        createdBy: uid,
+        title: sanitizeText(col.title, LIMITS.COLUMN_TITLE_MAX) || `Column ${idx + 1}`,
+        position: clampPosition((idx + 1) * 1000),
+        wipLimit: Math.max(0, Math.min(LIMITS.COLUMN_WIP_MAX, Math.round(col.wipLimit || 0))),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    });
+
+    try {
+      await colBatch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `boards/${boardId}/columns`);
+    }
+  }
+
+  // Prepare tasks and subtasks
+  const today = getTodayDateKey();
+  interface QueuedTask {
+    taskId: string;
+    columnId: string;
+    payload: Record<string, unknown>;
+    subtasks: Array<{ title: string; completed: boolean }>;
+  }
+  const queuedTasks: QueuedTask[] = [];
+
+  columnsToCreate.forEach((col, colIdx) => {
+    const columnId = colIdByIndex[colIdx];
+    col.tasks.forEach((t, tIdx) => {
+      const cleanTaskTitle = sanitizeText(t.title, LIMITS.TASK_TITLE_MAX);
+      if (!cleanTaskTitle) return;
+      const taskId = generateId('tsk');
+      const safeLinks = (() => {
+        try {
+          return sanitizeTaskLinks(t.links);
+        } catch {
+          return [];
+        }
+      })();
+      const dueDate = sanitizeDateKey(t.dueDate);
+      const completed = Boolean(t.completed);
+      queuedTasks.push({
+        taskId,
+        columnId,
+        payload: {
+          id: taskId,
+          boardId,
+          columnId,
+          ownerId: uid,
+          createdBy: uid,
+          assigneeId: '',
+          title: cleanTaskTitle,
+          description: sanitizeText(t.description, LIMITS.TASK_DESC_MAX),
+          priority: t.priority,
+          position: clampPosition((tIdx + 1) * 1000),
+          tags: sanitizeTags(t.tags),
+          dueDate,
+          completed,
+          placedOnColumnAt: today,
+          completedAt: completed ? today : '',
+          links: safeLinks,
+          milestones: sanitizeTaskMilestones(t.milestones),
+          notificationsEnabled: true,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        subtasks: t.subtasks,
+      });
+    });
+  });
+
+  // Commit tasks in chunks before subtasks
+  for (let start = 0; start < queuedTasks.length; start += BATCH_LIMIT) {
+    const chunk = queuedTasks.slice(start, start + BATCH_LIMIT);
+    const taskBatch = writeBatch(db);
+    chunk.forEach((qt) => {
+      taskBatch.set(doc(db, 'boards', boardId, 'tasks', qt.taskId), qt.payload);
+    });
+    try {
+      await taskBatch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `boards/${boardId}/tasks`);
+    }
+  }
+
+  // Commit subtasks in chunks
+  const queuedSubtasks: Array<{
+    taskId: string;
+    subtaskId: string;
+    payload: Record<string, unknown>;
+  }> = [];
+
+  queuedTasks.forEach((qt) => {
+    qt.subtasks.forEach((sub, sIdx) => {
+      const cleanSubTitle = sanitizeText(sub.title, LIMITS.SUBTASK_TITLE_MAX);
+      if (!cleanSubTitle) return;
+      const subtaskId = generateId('sub');
+      queuedSubtasks.push({
+        taskId: qt.taskId,
+        subtaskId,
+        payload: {
+          id: subtaskId,
+          boardId,
+          taskId: qt.taskId,
+          ownerId: uid,
+          createdBy: uid,
+          title: cleanSubTitle,
+          completed: Boolean(sub.completed),
+          position: clampPosition((sIdx + 1) * 1000),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+      });
+    });
+  });
+
+  for (let start = 0; start < queuedSubtasks.length; start += BATCH_LIMIT) {
+    const chunk = queuedSubtasks.slice(start, start + BATCH_LIMIT);
+    const subBatch = writeBatch(db);
+    chunk.forEach((qs) => {
+      subBatch.set(
+        doc(db, 'boards', boardId, 'tasks', qs.taskId, 'subtasks', qs.subtaskId),
+        qs.payload
+      );
+    });
+    try {
+      await subBatch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `boards/${boardId}/subtasks`);
     }
   }
 

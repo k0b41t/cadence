@@ -267,7 +267,7 @@ export function NotificationsModal({
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
                   }`}
                 >
-                  All boards
+                  All Boards
                 </button>
                 <button
                   type="button"
@@ -278,7 +278,7 @@ export function NotificationsModal({
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
                   }`}
                 >
-                  Current board
+                  Current Board
                 </button>
               </div>
             )}

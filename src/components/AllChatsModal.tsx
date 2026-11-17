@@ -261,7 +261,7 @@ export function AllChatsModal({
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
                   }`}
                 >
-                  All boards
+                  All Boards
                 </button>
                 <button
                   type="button"
@@ -272,7 +272,7 @@ export function AllChatsModal({
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
                   }`}
                 >
-                  This board
+                  This Board
                 </button>
               </div>
             )}
