@@ -2,20 +2,15 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEven
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import {
   Bell,
-  BookOpen,
   CalendarDays,
   ChevronDown,
-  Cog,
   Columns3,
   Menu,
   MessageSquare,
-  Moon,
   Plus,
   Search,
   Settings,
-  ShieldCheck,
   SlidersHorizontal,
-  Sun,
   Users,
   X,
 } from 'lucide-react';
@@ -892,24 +887,28 @@ function WorkspaceApp() {
         isAdmin={isAdmin}
         canCreateBoards={isAdmin || canCreateBoards}
         isAdminPageActive={workspacePage === 'admin' && isAdmin}
+        theme={theme}
         mobileOpen={mobileSidebarOpen}
         onCloseMobile={() => setMobileSidebarOpen(false)}
         onSelectBoard={handleSelectBoard}
         onOpenNewBoard={() => setBoardModalState({ mode: 'create' })}
         onOpenJoinBoard={() => setJoinModalState({})}
         onOpenAdminPanel={() => setWorkspacePage('admin')}
+        onOpenDocs={() => setDocsOpen(true)}
+        onOpenThemeSettings={() => setThemeSettingsOpen(true)}
+        onToggleTheme={handleToggleTheme}
         onSignOut={handleSignOut}
       />
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top Workspace Header */}
-        <header className="h-14 px-4 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between gap-4 shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
+        <header className="h-14 px-4 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
             <button
               type="button"
               onClick={() => setMobileSidebarOpen(true)}
               aria-label="Open boards navigation"
-              className="lg:hidden p-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 rounded-md"
+              className="lg:hidden p-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 rounded-md shrink-0"
             >
               <Menu className="w-5 h-5" />
             </button>
@@ -927,66 +926,46 @@ function WorkspaceApp() {
                     : 'Workspace'}
               </h1>
               {workspacePage !== 'admin' && isArchived && (
-                <span className="text-xs font-medium text-amber-700 dark:text-amber-300 whitespace-nowrap">
+                <span className="text-xs font-medium text-amber-700 dark:text-amber-300 whitespace-nowrap shrink-0">
                   · Archived
                 </span>
               )}
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => setDocsOpen(true)}
-              aria-label="Open Cadence build documentation"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
-            >
-              <BookOpen className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Docs</span>
-            </button>
-
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={() =>
-                  setWorkspacePage((prev) => (prev === 'admin' ? 'workspace' : 'admin'))
-                }
-                aria-label="Workspace Admin and Whitelist"
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
-                  workspacePage === 'admin'
-                    ? 'bg-blue-600 border-blue-600 text-white'
-                    : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Admin</span>
-              </button>
-            )}
-
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               type="button"
               onClick={() => setNotificationsOpen(true)}
-              aria-label="View due date and milestone notifications"
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+              aria-label="Notifications"
+              title={
+                upcomingNotificationsCount > 0
+                  ? `Notifications (${upcomingNotificationsCount} upcoming)`
+                  : 'Notifications'
+              }
+              className={`inline-flex items-center gap-1 p-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 tabular-nums ${
                 upcomingNotificationsCount > 0
                   ? 'border-amber-200 dark:border-amber-800/80 bg-amber-50/70 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 hover:bg-amber-100/70 dark:hover:bg-amber-950/50'
-                  : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800'
               }`}
             >
-              <Bell className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Notifications</span>
-              {upcomingNotificationsCount > 0 && <span>· {upcomingNotificationsCount}</span>}
+              <Bell className="w-4 h-4 shrink-0" />
+              {upcomingNotificationsCount > 0 && (
+                <span className="text-[11px] leading-none">{upcomingNotificationsCount}</span>
+              )}
             </button>
 
             <button
               type="button"
               onClick={() => setAllChatsOpen(true)}
-              aria-label="View all task chats"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 tabular-nums"
+              aria-label="All task chats"
+              title={allMessages.length > 0 ? `Task chats (${allMessages.length})` : 'Task chats'}
+              className="inline-flex items-center gap-1 p-2 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 tabular-nums"
             >
-              <MessageSquare className="w-3.5 h-3.5" />
-              <span>Chats</span>
-              {allMessages.length > 0 && <span>· {allMessages.length}</span>}
+              <MessageSquare className="w-4 h-4 shrink-0" />
+              {allMessages.length > 0 && (
+                <span className="text-[11px] leading-none">{allMessages.length}</span>
+              )}
             </button>
 
             {workspacePage !== 'admin' && activeBoard && (
@@ -994,11 +973,13 @@ function WorkspaceApp() {
                 type="button"
                 onClick={() => setShareModalOpen(true)}
                 aria-label="Share and permissions"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 tabular-nums"
+                title={`Share & permissions (${members.length + 1})`}
+                className="inline-flex items-center gap-1 p-2 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 tabular-nums"
               >
-                <Users className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Share</span>
-                {members.length > 0 && <span>· {members.length + 1}</span>}
+                <Users className="w-4 h-4 shrink-0" />
+                {members.length > 0 && (
+                  <span className="text-[11px] leading-none">{members.length + 1}</span>
+                )}
               </button>
             )}
 
@@ -1007,39 +988,20 @@ function WorkspaceApp() {
                 type="button"
                 onClick={() => setBoardModalState({ mode: 'edit', board: activeBoard })}
                 aria-label="Board settings"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                title="Board settings"
+                className="p-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors shrink-0"
               >
-                <Settings className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Board</span>
+                <Settings className="w-4 h-4" />
               </button>
             )}
-
-            <button
-              type="button"
-              onClick={() => setThemeSettingsOpen(true)}
-              aria-label="Appearance and color palette settings"
-              title="Appearance & Color Palette"
-              className="p-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors shrink-0"
-            >
-              <Cog className="w-4 h-4" />
-            </button>
-
-            <button
-              type="button"
-              onClick={handleToggleTheme}
-              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-              className="p-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors shrink-0"
-            >
-              {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-            </button>
 
             {workspacePage !== 'admin' && activeBoard && effectivePermissions.canCreateTasks && columns.length > 0 && (
               <button
                 type="button"
                 onClick={() => setCreateTaskOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1.5 px-3 sm:px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
               >
-                <Plus className="w-3.5 h-3.5" />
+                <Plus className="w-3.5 h-3.5 shrink-0" />
                 <span>New task</span>
               </button>
             )}
@@ -1292,7 +1254,7 @@ function WorkspaceApp() {
                 </h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">
                   {isAdmin || canCreateBoards
-                    ? "Create a new Kanban board or join a teammate's shared board with an invite link."
+                    ? "Create a new board or join a teammate's shared board with an invite link."
                     : "Join a teammate's shared board with an invite link, or ask an administrator for permission to create boards."}
                 </p>
                 <div className="flex items-center justify-center gap-3 pt-1">

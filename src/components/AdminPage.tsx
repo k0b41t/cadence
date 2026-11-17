@@ -338,7 +338,7 @@ export function AdminPage({
               className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline mb-1"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Back to Kanban Boards</span>
+              <span>Back to Boards</span>
             </button>
             <h2 className="font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
               Workspace Access &amp; Admin

@@ -1,17 +1,21 @@
 import { useState } from 'react';
 import {
   Archive,
+  BookOpen,
   Check,
+  Cog,
   Copy,
   FolderKanban,
   Link2,
   LogOut,
+  Moon,
   Plus,
   ShieldCheck,
+  Sun,
   Users,
   X,
 } from 'lucide-react';
-import type { Board, UserProfile } from '../types/kanban';
+import type { Board, ThemeMode, UserProfile } from '../types/kanban';
 
 interface SidebarProps {
   uid: string;
@@ -22,12 +26,16 @@ interface SidebarProps {
   isAdmin: boolean;
   canCreateBoards: boolean;
   isAdminPageActive: boolean;
+  theme: ThemeMode;
   mobileOpen: boolean;
   onCloseMobile: () => void;
   onSelectBoard: (boardId: string) => void;
   onOpenNewBoard: () => void;
   onOpenJoinBoard: () => void;
   onOpenAdminPanel: () => void;
+  onOpenDocs: () => void;
+  onOpenThemeSettings: () => void;
+  onToggleTheme: () => void;
   onSignOut: () => void;
 }
 
@@ -40,12 +48,16 @@ export function Sidebar({
   isAdmin,
   canCreateBoards,
   isAdminPageActive,
+  theme,
   mobileOpen,
   onCloseMobile,
   onSelectBoard,
   onOpenNewBoard,
   onOpenJoinBoard,
   onOpenAdminPanel,
+  onOpenDocs,
+  onOpenThemeSettings,
+  onToggleTheme,
   onSignOut,
 }: SidebarProps) {
   const [avatarFailed, setAvatarFailed] = useState(false);
@@ -222,7 +234,7 @@ export function Sidebar({
         )}
       </div>
 
-      {/* Admin Controls & User Footer */}
+      {/* Workspace Utilities, Admin Controls & User Footer */}
       <div className="p-3 border-t border-slate-200 dark:border-slate-800 space-y-2 shrink-0">
         {isAdmin && (
           <button
@@ -244,6 +256,56 @@ export function Sidebar({
             <span className="text-[11px]">{isAdminPageActive ? 'Active' : 'Manage'}</span>
           </button>
         )}
+
+        <div className="grid grid-cols-3 gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              onOpenDocs();
+              onCloseMobile();
+            }}
+            aria-label="Open Cadence build documentation"
+            title="Documentation"
+            className="inline-flex items-center justify-center gap-1 px-2 py-1.5 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg transition-colors whitespace-nowrap"
+          >
+            <BookOpen className="w-3.5 h-3.5 shrink-0" />
+            <span>Docs</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              onOpenThemeSettings();
+              onCloseMobile();
+            }}
+            aria-label="Appearance and theme settings"
+            title="Appearance & Theme"
+            className="inline-flex items-center justify-center gap-1 px-2 py-1.5 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg transition-colors whitespace-nowrap"
+          >
+            <Cog className="w-3.5 h-3.5 shrink-0" />
+            <span>Theme</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onToggleTheme}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={theme === 'dark' ? 'Switch to Light mode' : 'Switch to Dark mode'}
+            className="inline-flex items-center justify-center gap-1 px-2 py-1.5 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg transition-colors whitespace-nowrap"
+          >
+            {theme === 'dark' ? (
+              <>
+                <Sun className="w-3.5 h-3.5 shrink-0" />
+                <span>Light</span>
+              </>
+            ) : (
+              <>
+                <Moon className="w-3.5 h-3.5 shrink-0" />
+                <span>Dark</span>
+              </>
+            )}
+          </button>
+        </div>
 
         <div className="flex items-center justify-between gap-2 px-1.5 py-1">
           <div className="flex items-center gap-2.5 min-w-0">
