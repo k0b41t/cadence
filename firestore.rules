@@ -141,6 +141,10 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId))
         && get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.active == true
         && data.role == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.role
+        && (
+          (!('customRoleName' in data) && !('customRoleName' in get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data)) ||
+          ('customRoleName' in data && 'customRoleName' in get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data && data.customRoleName == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.customRoleName)
+        )
         && data.canCreateTasks == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canCreateTasks
         && data.canEditTasks == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canEditTasks
         && data.canDeleteTasks == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canDeleteTasks
@@ -209,7 +213,8 @@ service cloud.firestore {
         && data.userId is string && data.userId == userId && isValidId(data.userId)
         && data.boardTitle is string && data.boardTitle.size() >= 1 && data.boardTitle.size() <= 80
         && data.boardOwnerId is string && isValidId(data.boardOwnerId)
-        && data.role in ['viewer', 'contributor', 'editor', 'manager']
+        && data.role in ['viewer', 'contributor', 'editor', 'manager', 'custom']
+        && (!('customRoleName' in data) || (data.customRoleName is string && data.customRoleName.size() <= 40))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -218,6 +223,24 @@ service cloud.firestore {
       return url is string
         && url.size() <= 500
         && (url == '' || (url.size() >= 8 && url.matches('^https?://[^\\s]+$')));
+    }
+
+    function isValidBoardCustomRoleItem(item) {
+      return item is map
+        && item.keys().hasAll(['id', 'name', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns'])
+        && item.keys().hasOnly(['id', 'name', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns'])
+        && item.id is string && isValidId(item.id)
+        && item.name is string && item.name.size() >= 1 && item.name.size() <= 40
+        && item.canCreateTasks is bool
+        && item.canEditTasks is bool
+        && item.canDeleteTasks is bool
+        && item.canManageColumns is bool;
+    }
+
+    function isValidBoardCustomRoles(roles) {
+      return roles is list
+        && roles.size() <= 8
+        && (roles.size() == 0 || isValidBoardCustomRoleItem(roles[0]));
     }
 
     function isValidBoard(data, boardId) {
@@ -230,6 +253,7 @@ service cloud.firestore {
         && (!('backgroundImageUrl' in data) || isValidBoardBgUrl(data.backgroundImageUrl))
         && (!('surfaceOpacityEnabled' in data) || data.surfaceOpacityEnabled is bool)
         && (!('surfaceOpacity' in data) || (data.surfaceOpacity is number && data.surfaceOpacity >= 0 && data.surfaceOpacity <= 100))
+        && (!('customRoles' in data) || isValidBoardCustomRoles(data.customRoles))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -239,7 +263,8 @@ service cloud.firestore {
         && data.boardId is string && data.boardId == boardId && isValidId(data.boardId)
         && data.ownerId is string && isValidId(data.ownerId)
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
-        && data.role in ['viewer', 'contributor', 'editor', 'manager']
+        && data.role in ['viewer', 'contributor', 'editor', 'manager', 'custom']
+        && (!('customRoleName' in data) || (data.customRoleName is string && data.customRoleName.size() <= 40))
         && data.canView is bool
         && data.canCreateTasks is bool
         && data.canEditTasks is bool
@@ -256,7 +281,8 @@ service cloud.firestore {
         && data.ownerId is string && isValidId(data.ownerId)
         && data.createdBy is string && isValidId(data.createdBy)
         && data.label is string && data.label.size() <= 60
-        && data.role in ['viewer', 'contributor', 'editor', 'manager']
+        && data.role in ['viewer', 'contributor', 'editor', 'manager', 'custom']
+        && (!('customRoleName' in data) || (data.customRoleName is string && data.customRoleName.size() <= 40))
         && data.canCreateTasks is bool
         && data.canEditTasks is bool
         && data.canDeleteTasks is bool
@@ -588,7 +614,7 @@ service cloud.firestore {
           && isValidId(userId)
           && isValidId(boardId)
           && incoming().keys().hasAll(['boardId', 'userId', 'boardTitle', 'boardOwnerId', 'role', 'createdAt', 'updatedAt'])
-          && incoming().keys().hasOnly(['boardId', 'userId', 'boardTitle', 'boardOwnerId', 'role', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['boardId', 'userId', 'boardTitle', 'boardOwnerId', 'role', 'customRoleName', 'createdAt', 'updatedAt'])
           && isValidBoardRef(incoming(), userId, boardId)
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
@@ -613,7 +639,7 @@ service cloud.firestore {
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && (isAdmin() || isBoardOwner(boardId))
-          && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'boardTitle', 'updatedAt']);
+          && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'customRoleName', 'boardTitle', 'updatedAt']);
 
         allow delete: if isAllowedWorkspaceUser()
           && isValidId(userId)
@@ -640,7 +666,7 @@ service cloud.firestore {
       allow create: if canUserCreateBoards()
         && isValidId(boardId)
         && incoming().keys().hasAll(['id', 'ownerId', 'title', 'description', 'status', 'createdAt', 'updatedAt'])
-        && incoming().keys().hasOnly(['id', 'ownerId', 'ownerDisplayName', 'title', 'description', 'status', 'backgroundImageUrl', 'surfaceOpacityEnabled', 'surfaceOpacity', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['id', 'ownerId', 'ownerDisplayName', 'title', 'description', 'status', 'backgroundImageUrl', 'surfaceOpacityEnabled', 'surfaceOpacity', 'customRoles', 'createdAt', 'updatedAt'])
         && isValidBoard(incoming(), boardId)
         && incoming().ownerId == request.auth.uid
         && incoming().status == 'active'
@@ -662,6 +688,7 @@ service cloud.firestore {
             && (
               (incoming().status == 'archived' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
               (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'backgroundImageUrl', 'surfaceOpacityEnabled', 'surfaceOpacity', 'updatedAt'])) ||
+              (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['customRoles', 'updatedAt'])) ||
               (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['ownerDisplayName', 'updatedAt']))
             )
           )
@@ -685,7 +712,7 @@ service cloud.firestore {
           && isValidId(boardId)
           && isValidId(memberId)
           && incoming().keys().hasAll(['uid', 'boardId', 'ownerId', 'displayName', 'role', 'canView', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'createdAt', 'updatedAt'])
-          && incoming().keys().hasOnly(['uid', 'boardId', 'ownerId', 'displayName', 'role', 'canView', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'inviteId', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['uid', 'boardId', 'ownerId', 'displayName', 'role', 'customRoleName', 'canView', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'inviteId', 'createdAt', 'updatedAt'])
           && isValidBoardMember(incoming(), boardId, memberId)
           && incoming().canView == true
           && incoming().createdAt == request.time
@@ -715,6 +742,7 @@ service cloud.firestore {
           && (isAdmin() || (isBoardOwner(boardId) && isBoardActive(boardId)))
           && incoming().diff(existing()).affectedKeys().hasOnly([
             'role',
+            'customRoleName',
             'canView',
             'canCreateTasks',
             'canEditTasks',
@@ -740,7 +768,7 @@ service cloud.firestore {
           && isValidId(boardId)
           && isValidId(inviteId)
           && incoming().keys().hasAll(['id', 'boardId', 'ownerId', 'createdBy', 'label', 'role', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'active', 'createdAt', 'updatedAt'])
-          && incoming().keys().hasOnly(['id', 'boardId', 'ownerId', 'createdBy', 'label', 'role', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'active', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'boardId', 'ownerId', 'createdBy', 'label', 'role', 'customRoleName', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'active', 'createdAt', 'updatedAt'])
           && isValidBoardInvite(incoming(), boardId, inviteId)
           && incoming().createdBy == request.auth.uid
           && incoming().createdAt == request.time

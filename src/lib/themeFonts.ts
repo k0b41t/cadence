@@ -112,6 +112,20 @@ export const FONT_OPTIONS: FontOption[] = [
     sample: 'Midnight release party',
     stack: '"Jolly Lodger", system-ui, sans-serif',
   },
+  {
+    id: 'atkinson-hyperlegible',
+    label: 'Atkinson Hyperlegible',
+    category: 'Accessibility Sans',
+    sample: 'Distinct letterforms for fast reading',
+    stack: '"Atkinson Hyperlegible", system-ui, -apple-system, sans-serif',
+  },
+  {
+    id: 'lexend',
+    label: 'Lexend',
+    category: 'Reading Fluency',
+    sample: 'Effortless scanning across every lane',
+    stack: '"Lexend", system-ui, -apple-system, sans-serif',
+  },
 ];
 
 const VALID_FONT_IDS = new Set(FONT_OPTIONS.map((f) => f.id));

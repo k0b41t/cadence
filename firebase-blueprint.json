@@ -278,8 +278,13 @@
         },
         "role": {
           "type": "string",
-          "description": "Assigned role label.",
-          "enum": ["viewer", "contributor", "editor", "manager"]
+          "description": "Assigned role key (built-in preset or custom).",
+          "enum": ["viewer", "contributor", "editor", "manager", "custom"]
+        },
+        "customRoleName": {
+          "type": "string",
+          "description": "Optional board-defined custom role name when role is custom.",
+          "maxLength": 40
         },
         "createdAt": {
           "type": "string",
@@ -348,6 +353,10 @@
           "type": "number",
           "description": "Opacity percentage (0-100) applied to column and task card backgrounds when enabled."
         },
+        "customRoles": {
+          "type": "array",
+          "description": "Up to 8 board-specific custom named roles with assigned utility permissions."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -395,8 +404,13 @@
         },
         "role": {
           "type": "string",
-          "description": "Preset role name.",
-          "enum": ["viewer", "contributor", "editor", "manager"]
+          "description": "Preset role name or custom.",
+          "enum": ["viewer", "contributor", "editor", "manager", "custom"]
+        },
+        "customRoleName": {
+          "type": "string",
+          "description": "Optional board-defined custom role name when role is custom.",
+          "maxLength": 40
         },
         "canView": {
           "type": "boolean",
@@ -490,8 +504,13 @@
         },
         "role": {
           "type": "string",
-          "description": "Preset role name.",
-          "enum": ["viewer", "contributor", "editor", "manager"]
+          "description": "Preset role name or custom.",
+          "enum": ["viewer", "contributor", "editor", "manager", "custom"]
+        },
+        "customRoleName": {
+          "type": "string",
+          "description": "Optional board-defined custom role name when role is custom.",
+          "maxLength": 40
         },
         "canCreateTasks": {
           "type": "boolean",

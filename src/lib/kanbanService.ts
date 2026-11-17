@@ -24,6 +24,7 @@ import {
   type AccessCode,
   type AdminRecord,
   type Board,
+  type BoardCustomRole,
   type BoardInvite,
   type BoardMember,
   type BoardPermissions,
@@ -1058,6 +1059,38 @@ export async function updateBoardDetails(
   }
 }
 
+export async function updateBoardCustomRoles(
+  boardId: string,
+  customRoles: BoardCustomRole[]
+): Promise<void> {
+  assertValidId(boardId, 'boardId');
+  const sanitized = customRoles
+    .slice(0, LIMITS.BOARD_CUSTOM_ROLES_MAX)
+    .map((cr) => {
+      const cleanId = assertValidId(cr.id, 'customRoleId');
+      const cleanName = sanitizeText(cr.name, LIMITS.CUSTOM_ROLE_NAME_MAX);
+      if (!cleanName) throw new Error('Custom role name cannot be empty.');
+      return {
+        id: cleanId,
+        name: cleanName,
+        canCreateTasks: Boolean(cr.canCreateTasks),
+        canEditTasks: Boolean(cr.canEditTasks),
+        canDeleteTasks: Boolean(cr.canDeleteTasks),
+        canManageColumns: Boolean(cr.canManageColumns),
+      };
+    });
+
+  const path = `boards/${boardId}`;
+  try {
+    await updateDoc(doc(db, 'boards', boardId), {
+      customRoles: sanitized,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
 export async function archiveBoard(boardId: string): Promise<void> {
   assertValidId(boardId, 'boardId');
   const path = `boards/${boardId}`;
@@ -1622,7 +1655,8 @@ export async function grantBoardAccessByEmail(
   board: Board,
   email: string,
   role: BoardRole,
-  permissions: BoardPermissions
+  permissions: BoardPermissions,
+  customRoleName?: string
 ): Promise<{ uid: string; displayName: string }> {
   const emailHash = await hashEmail(email);
   const lookupPath = `emailLookup/${emailHash}`;
@@ -1650,7 +1684,7 @@ export async function grantBoardAccessByEmail(
     throw new Error('This user is already the creator of this board.');
   }
 
-  await grantBoardAccessByUid(board, targetUid, displayName, role, permissions);
+  await grantBoardAccessByUid(board, targetUid, displayName, role, permissions, customRoleName);
   return { uid: targetUid, displayName };
 }
 
@@ -1659,7 +1693,8 @@ export async function grantBoardAccessByUid(
   targetUid: string,
   displayName: string,
   role: BoardRole,
-  permissions: BoardPermissions
+  permissions: BoardPermissions,
+  customRoleName?: string
 ): Promise<void> {
   assertValidId(board.id, 'boardId');
   assertValidId(targetUid, 'userId');
@@ -1668,6 +1703,10 @@ export async function grantBoardAccessByUid(
   }
 
   const cleanName = sanitizeText(displayName || 'Collaborator', LIMITS.USER_DISPLAY_NAME_MAX) || 'Collaborator';
+  const cleanRoleName =
+    role === 'custom' && customRoleName
+      ? sanitizeText(customRoleName, LIMITS.CUSTOM_ROLE_NAME_MAX)
+      : '';
   const batch = writeBatch(db);
 
   batch.set(doc(db, 'boards', board.id, 'members', targetUid), {
@@ -1676,6 +1715,7 @@ export async function grantBoardAccessByUid(
     ownerId: board.ownerId,
     displayName: cleanName,
     role,
+    customRoleName: cleanRoleName,
     canView: true,
     canCreateTasks: permissions.canCreateTasks,
     canEditTasks: permissions.canEditTasks,
@@ -1691,6 +1731,7 @@ export async function grantBoardAccessByUid(
     boardTitle: sanitizeText(board.title, LIMITS.BOARD_TITLE_MAX),
     boardOwnerId: board.ownerId,
     role,
+    customRoleName: cleanRoleName,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
@@ -1706,14 +1747,21 @@ export async function updateMemberPermissions(
   board: Board,
   memberUid: string,
   role: BoardRole,
-  permissions: BoardPermissions
+  permissions: BoardPermissions,
+  customRoleName?: string
 ): Promise<void> {
   assertValidId(board.id, 'boardId');
   assertValidId(memberUid, 'memberUid');
 
+  const cleanRoleName =
+    role === 'custom' && customRoleName
+      ? sanitizeText(customRoleName, LIMITS.CUSTOM_ROLE_NAME_MAX)
+      : '';
+
   const batch = writeBatch(db);
   batch.update(doc(db, 'boards', board.id, 'members', memberUid), {
     role,
+    customRoleName: cleanRoleName,
     canView: true,
     canCreateTasks: permissions.canCreateTasks,
     canEditTasks: permissions.canEditTasks,
@@ -1723,6 +1771,7 @@ export async function updateMemberPermissions(
   });
   batch.update(doc(db, 'users', memberUid, 'boardRefs', board.id), {
     role,
+    customRoleName: cleanRoleName,
     boardTitle: sanitizeText(board.title, LIMITS.BOARD_TITLE_MAX),
     updatedAt: serverTimestamp(),
   });
@@ -1754,12 +1803,17 @@ export async function createBoardInvite(
   board: Board,
   label: string,
   role: BoardRole,
-  permissions: BoardPermissions
+  permissions: BoardPermissions,
+  customRoleName?: string
 ): Promise<string> {
   assertValidId(actorUid, 'userId');
   assertValidId(board.id, 'boardId');
 
   const inviteId = generateId('inv');
+  const cleanRoleName =
+    role === 'custom' && customRoleName
+      ? sanitizeText(customRoleName, LIMITS.CUSTOM_ROLE_NAME_MAX)
+      : '';
   const path = `boards/${board.id}/invites/${inviteId}`;
   try {
     await setDoc(doc(db, 'boards', board.id, 'invites', inviteId), {
@@ -1769,6 +1823,7 @@ export async function createBoardInvite(
       createdBy: actorUid,
       label: sanitizeText(label, LIMITS.INVITE_LABEL_MAX),
       role,
+      customRoleName: cleanRoleName,
       canCreateTasks: permissions.canCreateTasks,
       canEditTasks: permissions.canEditTasks,
       canDeleteTasks: permissions.canDeleteTasks,
@@ -1854,8 +1909,7 @@ export async function redeemBoardInvite(
       LIMITS.USER_DISPLAY_NAME_MAX
     ) || 'Collaborator';
 
-  const batch = writeBatch(db);
-  batch.set(doc(db, 'boards', boardId, 'members', user.uid), {
+  const memberPayload: Record<string, unknown> = {
     uid: user.uid,
     boardId,
     ownerId: invite.ownerId,
@@ -1869,9 +1923,9 @@ export async function redeemBoardInvite(
     inviteId: invite.id,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-  });
+  };
 
-  batch.set(doc(db, 'users', user.uid, 'boardRefs', boardId), {
+  const refPayload: Record<string, unknown> = {
     boardId,
     userId: user.uid,
     boardTitle: invite.label ? `Shared Board (${invite.label})` : 'Shared Board',
@@ -1879,7 +1933,16 @@ export async function redeemBoardInvite(
     role: invite.role,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-  });
+  };
+
+  if (typeof invite.customRoleName === 'string') {
+    memberPayload.customRoleName = invite.customRoleName;
+    refPayload.customRoleName = invite.customRoleName;
+  }
+
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'boards', boardId, 'members', user.uid), memberPayload);
+  batch.set(doc(db, 'users', user.uid, 'boardRefs', boardId), refPayload);
 
   try {
     await batch.commit();

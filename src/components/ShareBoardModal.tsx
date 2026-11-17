@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Check, Copy, Link2, Trash2, UserPlus, Users, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Check, Copy, Link2, Plus, Shield, Trash2, UserPlus, Users, X } from 'lucide-react';
 import {
   createBoardInvite,
   grantBoardAccessByEmail,
@@ -7,16 +7,22 @@ import {
   revokeBoardAccess,
   revokeBoardInvite,
   subscribeBoardInvites,
+  updateBoardCustomRoles,
   updateMemberPermissions,
 } from '../lib/kanbanService';
 import {
+  BUILTIN_ROLE_KEYS,
+  getRoleSelectionForValue,
   LIMITS,
+  permissionsMatch,
+  resolveRoleFromPermissions,
   ROLE_PRESETS,
   type Board,
+  type BoardCustomRole,
   type BoardInvite,
   type BoardMember,
   type BoardPermissions,
-  type BoardRole,
+  type PermissionShape,
 } from '../types/kanban';
 
 interface ShareBoardModalProps {
@@ -27,6 +33,33 @@ interface ShareBoardModalProps {
   onClose: () => void;
 }
 
+const PERMISSION_FIELDS: ReadonlyArray<{
+  key: keyof Omit<BoardPermissions, 'canView'>;
+  label: string;
+  shortLabel: string;
+}> = [
+  { key: 'canCreateTasks', label: 'Create tasks', shortLabel: 'Create tasks' },
+  { key: 'canEditTasks', label: 'Edit & move tasks', shortLabel: 'Edit & move' },
+  { key: 'canDeleteTasks', label: 'Delete tasks', shortLabel: 'Delete tasks' },
+  { key: 'canManageColumns', label: 'Add & manage columns', shortLabel: 'Manage columns' },
+];
+
+function summarizePermissions(perms: PermissionShape): string {
+  const parts = PERMISSION_FIELDS.filter((f) => perms[f.key]).map((f) => f.shortLabel);
+  return parts.length > 0 ? parts.join(' · ') : 'View only';
+}
+
+const RESERVED_ROLE_NAMES = new Set([
+  'viewer',
+  'contributor',
+  'editor',
+  'board manager',
+  'manager',
+  'custom',
+  'creator',
+  'admin',
+]);
+
 export function ShareBoardModal({
   uid,
   board,
@@ -34,22 +67,32 @@ export function ShareBoardModal({
   canManageSharing,
   onClose,
 }: ShareBoardModalProps) {
+  const customRoles = useMemo(() => board.customRoles ?? [], [board.customRoles]);
+
   const [invites, setInvites] = useState<BoardInvite[]>([]);
   const [shareMode, setShareMode] = useState<'email' | 'uid'>('email');
   const [targetEmail, setTargetEmail] = useState('');
   const [targetUid, setTargetUid] = useState('');
   const [targetDisplayName, setTargetDisplayName] = useState('');
 
-  const [role, setRole] = useState<BoardRole>('contributor');
-  const [permissions, setPermissions] = useState<BoardPermissions>(
-    ROLE_PRESETS.contributor.permissions
-  );
+  const [permissions, setPermissions] = useState<BoardPermissions>({
+    ...ROLE_PRESETS.contributor.permissions,
+  });
 
   const [inviteLabel, setInviteLabel] = useState('');
-  const [inviteRole, setInviteRole] = useState<BoardRole>('contributor');
-  const [invitePerms, setInvitePerms] = useState<BoardPermissions>(
-    ROLE_PRESETS.contributor.permissions
-  );
+  const [invitePerms, setInvitePerms] = useState<BoardPermissions>({
+    ...ROLE_PRESETS.contributor.permissions,
+  });
+
+  const [showNewRoleForm, setShowNewRoleForm] = useState(false);
+  const [newRoleName, setNewRoleName] = useState('');
+  const [newRolePerms, setNewRolePerms] = useState<PermissionShape>({
+    canCreateTasks: true,
+    canEditTasks: false,
+    canDeleteTasks: false,
+    canManageColumns: false,
+  });
+  const [savingRoles, setSavingRoles] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [creatingInvite, setCreatingInvite] = useState(false);
@@ -71,14 +114,46 @@ export function ShareBoardModal({
     return () => window.removeEventListener('keydown', handleKey);
   }, [onClose]);
 
-  const handleRoleChange = (nextRole: BoardRole) => {
-    setRole(nextRole);
-    setPermissions({ ...ROLE_PRESETS[nextRole].permissions });
+  const resolvedGrantRole = useMemo(
+    () => resolveRoleFromPermissions(permissions, customRoles),
+    [permissions, customRoles]
+  );
+
+  const resolvedInviteRole = useMemo(
+    () => resolveRoleFromPermissions(invitePerms, customRoles),
+    [invitePerms, customRoles]
+  );
+
+  const newRoleConflict = useMemo(() => {
+    const trimmed = newRoleName.trim();
+    const lower = trimmed.toLowerCase();
+    if (trimmed && RESERVED_ROLE_NAMES.has(lower)) {
+      return `"${trimmed}" is a reserved role name.`;
+    }
+    if (trimmed && customRoles.some((cr) => cr.name.trim().toLowerCase() === lower)) {
+      return `A board role named "${trimmed}" already exists.`;
+    }
+    for (const key of BUILTIN_ROLE_KEYS) {
+      if (permissionsMatch(newRolePerms, ROLE_PRESETS[key].permissions)) {
+        return `These permissions already match the built-in "${ROLE_PRESETS[key].label}" role.`;
+      }
+    }
+    for (const cr of customRoles) {
+      if (permissionsMatch(newRolePerms, cr)) {
+        return `These permissions already match the "${cr.name}" role.`;
+      }
+    }
+    return null;
+  }, [newRoleName, newRolePerms, customRoles]);
+
+  const handleGrantRoleSelect = (selectValue: string) => {
+    const sel = getRoleSelectionForValue(selectValue, permissions, customRoles);
+    setPermissions(sel.permissions);
   };
 
-  const handleInviteRoleChange = (nextRole: BoardRole) => {
-    setInviteRole(nextRole);
-    setInvitePerms({ ...ROLE_PRESETS[nextRole].permissions });
+  const handleInviteRoleSelect = (selectValue: string) => {
+    const sel = getRoleSelectionForValue(selectValue, invitePerms, customRoles);
+    setInvitePerms(sel.permissions);
   };
 
   const handleGrantAccess = async (e: React.FormEvent) => {
@@ -92,8 +167,14 @@ export function ShareBoardModal({
       if (shareMode === 'email') {
         const cleanEmail = targetEmail.trim();
         if (!cleanEmail) throw new Error('Enter an email address.');
-        const res = await grantBoardAccessByEmail(board, cleanEmail, role, permissions);
-        setSuccessMsg(`Granted ${ROLE_PRESETS[role].label} access to ${res.displayName}.`);
+        const res = await grantBoardAccessByEmail(
+          board,
+          cleanEmail,
+          resolvedGrantRole.role,
+          permissions,
+          resolvedGrantRole.customRoleName
+        );
+        setSuccessMsg(`Granted ${resolvedGrantRole.label} access to ${res.displayName}.`);
         setTargetEmail('');
       } else {
         const cleanUid = targetUid.trim();
@@ -102,10 +183,11 @@ export function ShareBoardModal({
           board,
           cleanUid,
           targetDisplayName.trim() || 'Collaborator',
-          role,
-          permissions
+          resolvedGrantRole.role,
+          permissions,
+          resolvedGrantRole.customRoleName
         );
-        setSuccessMsg('Collaborator added to board.');
+        setSuccessMsg(`Collaborator added with ${resolvedGrantRole.label} access.`);
         setTargetUid('');
         setTargetDisplayName('');
       }
@@ -116,11 +198,36 @@ export function ShareBoardModal({
     }
   };
 
+  const handleMemberRoleSelect = async (member: BoardMember, selectValue: string) => {
+    if (!canManageSharing || board.status !== 'active') return;
+    setErrorMsg(null);
+    const currentPerms: BoardPermissions = {
+      canView: true,
+      canCreateTasks: member.canCreateTasks,
+      canEditTasks: member.canEditTasks,
+      canDeleteTasks: member.canDeleteTasks,
+      canManageColumns: member.canManageColumns,
+    };
+    const sel = getRoleSelectionForValue(selectValue, currentPerms, customRoles);
+    try {
+      await updateMemberPermissions(
+        board,
+        member.uid,
+        sel.role,
+        sel.permissions,
+        sel.customRoleName
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to update member role.');
+    }
+  };
+
   const handleToggleMemberPerm = async (
     member: BoardMember,
     field: keyof Omit<BoardPermissions, 'canView'>
   ) => {
-    if (!canManageSharing) return;
+    if (!canManageSharing || board.status !== 'active') return;
+    setErrorMsg(null);
     const nextPerms: BoardPermissions = {
       canView: true,
       canCreateTasks: member.canCreateTasks,
@@ -130,15 +237,74 @@ export function ShareBoardModal({
       [field]: !member[field],
     };
 
-    const derivedRole: BoardRole = nextPerms.canManageColumns
-      ? 'manager'
-      : nextPerms.canDeleteTasks
-        ? 'editor'
-        : nextPerms.canCreateTasks || nextPerms.canEditTasks
-          ? 'contributor'
-          : 'viewer';
+    const nextResolved = resolveRoleFromPermissions(nextPerms, customRoles);
+    try {
+      await updateMemberPermissions(
+        board,
+        member.uid,
+        nextResolved.role,
+        nextPerms,
+        nextResolved.customRoleName
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to update member permissions.');
+    }
+  };
 
-    await updateMemberPermissions(board, member.uid, derivedRole, nextPerms);
+  const handleCreateCustomRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canManageSharing || board.status !== 'active' || savingRoles) return;
+    const cleanName = newRoleName.trim();
+    if (!cleanName) {
+      setErrorMsg('Enter a name for the board role.');
+      return;
+    }
+    if (newRoleConflict) {
+      setErrorMsg(newRoleConflict);
+      return;
+    }
+    if (customRoles.length >= LIMITS.BOARD_CUSTOM_ROLES_MAX) {
+      setErrorMsg(`Maximum of ${LIMITS.BOARD_CUSTOM_ROLES_MAX} custom roles per board reached.`);
+      return;
+    }
+
+    setSavingRoles(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      const nextRole: BoardCustomRole = {
+        id: `role_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+        name: cleanName.slice(0, LIMITS.CUSTOM_ROLE_NAME_MAX),
+        canCreateTasks: newRolePerms.canCreateTasks,
+        canEditTasks: newRolePerms.canEditTasks,
+        canDeleteTasks: newRolePerms.canDeleteTasks,
+        canManageColumns: newRolePerms.canManageColumns,
+      };
+      await updateBoardCustomRoles(board.id, [...customRoles, nextRole]);
+      setSuccessMsg(`Created board role "${nextRole.name}".`);
+      setNewRoleName('');
+      setShowNewRoleForm(false);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to create custom role.');
+    } finally {
+      setSavingRoles(false);
+    }
+  };
+
+  const handleDeleteCustomRole = async (roleId: string, roleName: string) => {
+    if (!canManageSharing || board.status !== 'active' || savingRoles) return;
+    setSavingRoles(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      const remaining = customRoles.filter((cr) => cr.id !== roleId);
+      await updateBoardCustomRoles(board.id, remaining);
+      setSuccessMsg(`Removed board role "${roleName}".`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to remove custom role.');
+    } finally {
+      setSavingRoles(false);
+    }
   };
 
   const handleCreateInvite = async (e: React.FormEvent) => {
@@ -147,7 +313,14 @@ export function ShareBoardModal({
     setCreatingInvite(true);
     setErrorMsg(null);
     try {
-      await createBoardInvite(uid, board, inviteLabel, inviteRole, invitePerms);
+      await createBoardInvite(
+        uid,
+        board,
+        inviteLabel,
+        resolvedInviteRole.role,
+        invitePerms,
+        resolvedInviteRole.customRoleName
+      );
       setInviteLabel('');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to create invite link.');
@@ -164,6 +337,30 @@ export function ShareBoardModal({
   };
 
   const activeInvites = invites.filter((i) => i.active);
+
+  const renderRoleOptions = (currentSelectValue: string) => (
+    <>
+      <optgroup label="Built-in Roles">
+        {BUILTIN_ROLE_KEYS.map((key) => (
+          <option key={key} value={key}>
+            {ROLE_PRESETS[key].label}
+          </option>
+        ))}
+      </optgroup>
+      {customRoles.length > 0 && (
+        <optgroup label="Board Roles">
+          {customRoles.map((cr) => (
+            <option key={cr.id} value={`custom:${cr.id}`}>
+              {cr.name}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      <option value="custom" disabled={currentSelectValue !== 'custom'}>
+        Custom
+      </option>
+    </>
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/50">
@@ -262,19 +459,15 @@ export function ShareBoardModal({
                   </div>
                   <div className="sm:col-span-5">
                     <label htmlFor="share-role-select" className="sr-only">
-                      Preset role
+                      Collaborator role
                     </label>
                     <select
                       id="share-role-select"
-                      value={role}
-                      onChange={(e) => handleRoleChange(e.target.value as BoardRole)}
+                      value={resolvedGrantRole.selectValue}
+                      onChange={(e) => handleGrantRoleSelect(e.target.value)}
                       className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
                     >
-                      {(Object.keys(ROLE_PRESETS) as BoardRole[]).map((r) => (
-                        <option key={r} value={r}>
-                          {ROLE_PRESETS[r].label}
-                        </option>
-                      ))}
+                      {renderRoleOptions(resolvedGrantRole.selectValue)}
                     </select>
                   </div>
                 </div>
@@ -301,15 +494,12 @@ export function ShareBoardModal({
                   </div>
                   <div className="sm:col-span-3">
                     <select
-                      value={role}
-                      onChange={(e) => handleRoleChange(e.target.value as BoardRole)}
+                      aria-label="Collaborator role"
+                      value={resolvedGrantRole.selectValue}
+                      onChange={(e) => handleGrantRoleSelect(e.target.value)}
                       className="w-full px-2.5 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
                     >
-                      {(Object.keys(ROLE_PRESETS) as BoardRole[]).map((r) => (
-                        <option key={r} value={r}>
-                          {ROLE_PRESETS[r].label}
-                        </option>
-                      ))}
+                      {renderRoleOptions(resolvedGrantRole.selectValue)}
                     </select>
                   </div>
                 </div>
@@ -321,56 +511,25 @@ export function ShareBoardModal({
                   Collaborator Permissions
                 </div>
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-700 dark:text-slate-300">
-                  <label className="inline-flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={permissions.canCreateTasks}
-                      onChange={(e) =>
-                        setPermissions({ ...permissions, canCreateTasks: e.target.checked })
-                      }
-                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
-                    />
-                    <span>Create tasks</span>
-                  </label>
-                  <label className="inline-flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={permissions.canEditTasks}
-                      onChange={(e) =>
-                        setPermissions({ ...permissions, canEditTasks: e.target.checked })
-                      }
-                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
-                    />
-                    <span>Edit & move tasks</span>
-                  </label>
-                  <label className="inline-flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={permissions.canDeleteTasks}
-                      onChange={(e) =>
-                        setPermissions({ ...permissions, canDeleteTasks: e.target.checked })
-                      }
-                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
-                    />
-                    <span>Delete tasks</span>
-                  </label>
-                  <label className="inline-flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={permissions.canManageColumns}
-                      onChange={(e) =>
-                        setPermissions({ ...permissions, canManageColumns: e.target.checked })
-                      }
-                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
-                    />
-                    <span>Add & manage columns</span>
-                  </label>
+                  {PERMISSION_FIELDS.map(({ key, label }) => (
+                    <label key={key} className="inline-flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={permissions[key]}
+                        onChange={(e) =>
+                          setPermissions({ ...permissions, [key]: e.target.checked })
+                        }
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                      />
+                      <span>{label}</span>
+                    </label>
+                  ))}
                 </div>
               </div>
 
               <div className="flex items-center justify-between gap-4 pt-1">
                 <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                  {ROLE_PRESETS[role].description}
+                  {resolvedGrantRole.description}
                 </span>
                 <button
                   type="submit"
@@ -410,64 +569,186 @@ export function ShareBoardModal({
                 </span>
               </div>
 
-              {members.map((member) => (
-                <div key={member.uid} className="px-4 py-3 space-y-2.5">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">
-                        {member.displayName} {member.uid === uid ? '(You)' : ''}
+              {members.map((member) => {
+                const resolvedMemberRole = resolveRoleFromPermissions(member, customRoles);
+                return (
+                  <div key={member.uid} className="px-4 py-3 space-y-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">
+                          {member.displayName} {member.uid === uid ? '(You)' : ''}
+                        </div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">
+                          {resolvedMemberRole.label} ·{' '}
+                          <span className="font-mono">{member.uid.slice(0, 12)}</span>
+                        </div>
                       </div>
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        {ROLE_PRESETS[member.role]?.label ?? member.role} ·{' '}
-                        <span className="font-mono">{member.uid.slice(0, 12)}</span>
-                      </div>
+
+                      {canManageSharing && (
+                        <div className="flex items-center gap-3 shrink-0">
+                          {board.status === 'active' && (
+                            <select
+                              aria-label={`Role for ${member.displayName}`}
+                              value={resolvedMemberRole.selectValue}
+                              onChange={(e) => handleMemberRoleSelect(member, e.target.value)}
+                              className="px-2.5 py-1 text-xs bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                            >
+                              {renderRoleOptions(resolvedMemberRole.selectValue)}
+                            </select>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => revokeBoardAccess(board.id, member.uid)}
+                            aria-label={`Revoke access for ${member.displayName}`}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400 hover:underline whitespace-nowrap shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Revoke</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
 
-                    {canManageSharing && (
-                      <button
-                        type="button"
-                        onClick={() => revokeBoardAccess(board.id, member.uid)}
-                        aria-label={`Revoke access for ${member.displayName}`}
-                        className="inline-flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400 hover:underline whitespace-nowrap shrink-0"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Revoke</span>
-                      </button>
-                    )}
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-slate-600 dark:text-slate-400">
+                      {PERMISSION_FIELDS.map(({ key, label }) => (
+                        <label
+                          key={key}
+                          className={`inline-flex items-center gap-1.5 ${
+                            canManageSharing && board.status === 'active'
+                              ? 'cursor-pointer'
+                              : 'opacity-75'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            disabled={!canManageSharing || board.status !== 'active'}
+                            checked={member[key]}
+                            onChange={() => handleToggleMemberPerm(member, key)}
+                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                          />
+                          <span>{label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Board Custom Roles */}
+          {(canManageSharing || customRoles.length > 0) && (
+            <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                    <Shield className="w-3.5 h-3.5 text-slate-500" />
+                    <span>
+                      Board Custom Roles ({customRoles.length}/{LIMITS.BOARD_CUSTOM_ROLES_MAX})
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    Define reusable named permission sets. Changing a member&apos;s checkboxes
+                    automatically updates their role to match—or switches to Custom.
+                  </p>
+                </div>
+                {canManageSharing &&
+                  board.status === 'active' &&
+                  customRoles.length < LIMITS.BOARD_CUSTOM_ROLES_MAX && (
+                    <button
+                      type="button"
+                      onClick={() => setShowNewRoleForm((v) => !v)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-600 dark:text-blue-400 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>{showNewRoleForm ? 'Close' : 'New role'}</span>
+                    </button>
+                  )}
+              </div>
+
+              {showNewRoleForm && canManageSharing && board.status === 'active' && (
+                <form
+                  onSubmit={handleCreateCustomRole}
+                  className="bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 space-y-3"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+                    <label htmlFor="custom-role-name-input" className="sr-only">
+                      Custom role name
+                    </label>
+                    <input
+                      id="custom-role-name-input"
+                      type="text"
+                      maxLength={LIMITS.CUSTOM_ROLE_NAME_MAX}
+                      value={newRoleName}
+                      onChange={(e) => setNewRoleName(e.target.value)}
+                      placeholder="Role name (e.g. Triage Lead, Column Moderator)"
+                      className="flex-1 px-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    />
+                    <button
+                      type="submit"
+                      disabled={savingRoles || !newRoleName.trim() || Boolean(newRoleConflict)}
+                      className="px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                    >
+                      {savingRoles ? 'Saving...' : 'Save role'}
+                    </button>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-slate-600 dark:text-slate-400">
-                    {(
-                      [
-                        ['canCreateTasks', 'Create tasks'],
-                        ['canEditTasks', 'Edit & move tasks'],
-                        ['canDeleteTasks', 'Delete tasks'],
-                        ['canManageColumns', 'Add & manage columns'],
-                      ] as const
-                    ).map(([key, label]) => (
-                      <label
-                        key={key}
-                        className={`inline-flex items-center gap-1.5 ${
-                          canManageSharing && board.status === 'active'
-                            ? 'cursor-pointer'
-                            : 'opacity-75'
-                        }`}
-                      >
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-slate-600 dark:text-slate-400">
+                    {PERMISSION_FIELDS.map(({ key, label }) => (
+                      <label key={key} className="inline-flex items-center gap-1.5 cursor-pointer">
                         <input
                           type="checkbox"
-                          disabled={!canManageSharing || board.status !== 'active'}
-                          checked={member[key]}
-                          onChange={() => handleToggleMemberPerm(member, key)}
+                          checked={newRolePerms[key]}
+                          onChange={(e) =>
+                            setNewRolePerms({ ...newRolePerms, [key]: e.target.checked })
+                          }
                           className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
                         />
                         <span>{label}</span>
                       </label>
                     ))}
                   </div>
-                </div>
-              ))}
+
+                  {newRoleConflict && (
+                    <div className="text-[11px] text-amber-700 dark:text-amber-300">
+                      {newRoleConflict}
+                    </div>
+                  )}
+                </form>
+              )}
+
+              {customRoles.length > 0 && (
+                <ul className="space-y-2">
+                  {customRoles.map((cr) => (
+                    <li
+                      key={cr.id}
+                      className="flex items-center justify-between gap-3 px-3.5 py-2.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
+                          {cr.name}
+                        </div>
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                          {summarizePermissions(cr)}
+                        </div>
+                      </div>
+                      {canManageSharing && board.status === 'active' && (
+                        <button
+                          type="button"
+                          disabled={savingRoles}
+                          onClick={() => handleDeleteCustomRole(cr.id, cr.name)}
+                          aria-label={`Delete role ${cr.name}`}
+                          className="text-xs text-red-600 dark:text-red-400 hover:underline disabled:opacity-50 whitespace-nowrap shrink-0"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
-          </div>
+          )}
 
           {/* Shareable Invite Links */}
           {canManageSharing && (
@@ -483,7 +764,10 @@ export function ShareBoardModal({
               </div>
 
               {board.status === 'active' && (
-                <form onSubmit={handleCreateInvite} className="space-y-3 bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5">
+                <form
+                  onSubmit={handleCreateInvite}
+                  className="space-y-3 bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5"
+                >
                   <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
                     <div className="sm:col-span-5">
                       <input
@@ -497,15 +781,12 @@ export function ShareBoardModal({
                     </div>
                     <div className="sm:col-span-4">
                       <select
-                        value={inviteRole}
-                        onChange={(e) => handleInviteRoleChange(e.target.value as BoardRole)}
+                        aria-label="Invite link role"
+                        value={resolvedInviteRole.selectValue}
+                        onChange={(e) => handleInviteRoleSelect(e.target.value)}
                         className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
                       >
-                        {(Object.keys(ROLE_PRESETS) as BoardRole[]).map((r) => (
-                          <option key={r} value={r}>
-                            {ROLE_PRESETS[r].label}
-                          </option>
-                        ))}
+                        {renderRoleOptions(resolvedInviteRole.selectValue)}
                       </select>
                     </div>
                     <div className="sm:col-span-3">
@@ -519,46 +800,19 @@ export function ShareBoardModal({
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-slate-600 dark:text-slate-400">
-                    <label className="inline-flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={invitePerms.canCreateTasks}
-                        onChange={(e) =>
-                          setInvitePerms({ ...invitePerms, canCreateTasks: e.target.checked })
-                        }
-                      />
-                      <span>Create tasks</span>
-                    </label>
-                    <label className="inline-flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={invitePerms.canEditTasks}
-                        onChange={(e) =>
-                          setInvitePerms({ ...invitePerms, canEditTasks: e.target.checked })
-                        }
-                      />
-                      <span>Edit & move tasks</span>
-                    </label>
-                    <label className="inline-flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={invitePerms.canDeleteTasks}
-                        onChange={(e) =>
-                          setInvitePerms({ ...invitePerms, canDeleteTasks: e.target.checked })
-                        }
-                      />
-                      <span>Delete tasks</span>
-                    </label>
-                    <label className="inline-flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={invitePerms.canManageColumns}
-                        onChange={(e) =>
-                          setInvitePerms({ ...invitePerms, canManageColumns: e.target.checked })
-                        }
-                      />
-                      <span>Add & manage columns</span>
-                    </label>
+                    {PERMISSION_FIELDS.map(({ key, label }) => (
+                      <label key={key} className="inline-flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={invitePerms[key]}
+                          onChange={(e) =>
+                            setInvitePerms({ ...invitePerms, [key]: e.target.checked })
+                          }
+                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                        />
+                        <span>{label}</span>
+                      </label>
+                    ))}
                   </div>
                 </form>
               )}
@@ -566,58 +820,55 @@ export function ShareBoardModal({
               {activeInvites.length > 0 && (
                 <ul className="space-y-2">
                   {activeInvites.map((inv) => {
-                    const permSummary = [
-                      inv.canCreateTasks ? 'Create tasks' : null,
-                      inv.canEditTasks ? 'Edit & move' : null,
-                      inv.canDeleteTasks ? 'Delete tasks' : null,
-                      inv.canManageColumns ? 'Add/manage columns' : null,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ') || 'View only';
+                    const resolvedInvRole = resolveRoleFromPermissions(inv, customRoles);
+                    const invRoleLabel =
+                      resolvedInvRole.selectValue === 'custom' && inv.customRoleName
+                        ? inv.customRoleName
+                        : resolvedInvRole.label;
 
                     return (
-                    <li
-                      key={inv.id}
-                      className="flex items-center justify-between gap-3 px-3.5 py-2.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
-                    >
-                      <div className="min-w-0">
-                        <div className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
-                          {inv.label || ROLE_PRESETS[inv.role].label} ·{' '}
-                          <span className="text-slate-500 dark:text-slate-400">
-                            {ROLE_PRESETS[inv.role].label}
-                          </span>
+                      <li
+                        key={inv.id}
+                        className="flex items-center justify-between gap-3 px-3.5 py-2.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
+                            {inv.label || invRoleLabel} ·{' '}
+                            <span className="text-slate-500 dark:text-slate-400">
+                              {invRoleLabel}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                            {summarizePermissions(inv)}
+                          </div>
                         </div>
-                        <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                          {permSummary}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => copyInviteLink(inv)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded transition-colors whitespace-nowrap"
+                          >
+                            {copiedId === inv.id ? (
+                              <>
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Copied</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3.5 h-3.5" />
+                                <span>Copy link</span>
+                              </>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => revokeBoardInvite(board.id, inv.id)}
+                            className="text-xs text-red-600 dark:text-red-400 hover:underline whitespace-nowrap"
+                          >
+                            Revoke
+                          </button>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => copyInviteLink(inv)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded transition-colors whitespace-nowrap"
-                        >
-                          {copiedId === inv.id ? (
-                            <>
-                              <Check className="w-3.5 h-3.5" />
-                              <span>Copied</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5" />
-                              <span>Copy link</span>
-                            </>
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => revokeBoardInvite(board.id, inv.id)}
-                          className="text-xs text-red-600 dark:text-red-400 hover:underline whitespace-nowrap"
-                        >
-                          Revoke
-                        </button>
-                      </div>
-                    </li>
+                      </li>
                     );
                   })}
                 </ul>
@@ -639,3 +890,4 @@ export function ShareBoardModal({
     </div>
   );
 }
+

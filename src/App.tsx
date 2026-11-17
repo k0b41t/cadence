@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type CSSProperties, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import {
   Bell,
   BookOpen,
   CalendarDays,
+  ChevronDown,
   Cog,
   Columns3,
   Menu,
@@ -13,6 +14,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Sun,
   Users,
   X,
@@ -73,7 +75,7 @@ import {
 } from './lib/kanbanService';
 import {
   LIMITS,
-  ROLE_PRESETS,
+  resolveRoleFromPermissions,
   type Board,
   type BoardMember,
   type Column,
@@ -155,6 +157,8 @@ function WorkspaceApp() {
   const [priorityFilter, setPriorityFilter] = useState<'all' | Priority>('all');
   const [hideCompleted, setHideCompleted] = useState(false);
   const [myTasksOnly, setMyTasksOnly] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filtersMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Modals & UI drawers
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -204,6 +208,24 @@ function WorkspaceApp() {
   useEffect(() => {
     applyFontsToDocument(fonts);
   }, [fonts]);
+
+  useEffect(() => {
+    if (!filtersOpen) return;
+    const handlePointerDown = (e: PointerEvent) => {
+      if (filtersMenuRef.current && !filtersMenuRef.current.contains(e.target as Node)) {
+        setFiltersOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFiltersOpen(false);
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [filtersOpen]);
 
   const verifyAndProvisionUser = async (nextUser: User, autoRedeemCode: string | null) => {
     setAccessStatus('checking');
@@ -484,7 +506,7 @@ function WorkspaceApp() {
       canDeleteTasks: !isBoardArchived && myMembership.canDeleteTasks,
       canManageColumns: !isBoardArchived && myMembership.canManageColumns,
       canManageSharing: false,
-      roleLabel: ROLE_PRESETS[myMembership.role]?.label ?? myMembership.role,
+      roleLabel: resolveRoleFromPermissions(myMembership, activeBoard.customRoles ?? []).label,
     };
   }, [activeBoard, user, isAdmin, members]);
 
@@ -510,7 +532,7 @@ function WorkspaceApp() {
 
     members.forEach((m) => {
       if (!seen.has(m.uid)) {
-        const roleLabel = ROLE_PRESETS[m.role]?.label ?? m.role;
+        const roleLabel = resolveRoleFromPermissions(m, activeBoard.customRoles ?? []).label;
         options.push({
           uid: m.uid,
           label: `${m.displayName} (${roleLabel})`,
@@ -1050,55 +1072,152 @@ function WorkspaceApp() {
                 )}
               </div>
 
-              <div
-                role="group"
-                aria-label="Filter by priority"
-                className="flex items-center gap-0.5 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto"
-              >
-                {(['all', 'urgent', 'high', 'medium', 'low'] as const).map((level) => {
-                  const active = priorityFilter === level;
-                  return (
+              {(() => {
+                const activeFilterCount =
+                  (priorityFilter !== 'all' ? 1 : 0) +
+                  (hideCompleted ? 1 : 0) +
+                  (myTasksOnly ? 1 : 0);
+
+                const resetAllFilters = () => {
+                  setPriorityFilter('all');
+                  setHideCompleted(false);
+                  setMyTasksOnly(false);
+                };
+
+                return (
+                  <div ref={filtersMenuRef} className="relative flex items-center gap-1.5 shrink-0">
                     <button
-                      key={level}
                       type="button"
-                      onClick={() => setPriorityFilter(level)}
-                      className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors capitalize whitespace-nowrap shrink-0 ${
-                        active
-                          ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100'
-                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                      aria-expanded={filtersOpen}
+                      aria-haspopup="dialog"
+                      onClick={() => setFiltersOpen((prev) => !prev)}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                        activeFilterCount > 0 || filtersOpen
+                          ? 'bg-blue-50 dark:bg-blue-950/50 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300'
+                          : 'bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100'
                       }`}
                     >
-                      {level}
+                      <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+                      </span>
+                      <ChevronDown
+                        className={`w-3.5 h-3.5 shrink-0 transition-transform ${
+                          filtersOpen ? 'rotate-180' : ''
+                        }`}
+                      />
                     </button>
-                  );
-                })}
-              </div>
 
-              <button
-                type="button"
-                aria-pressed={hideCompleted}
-                onClick={() => setHideCompleted(!hideCompleted)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
-                  hideCompleted
-                    ? 'bg-blue-50 dark:bg-blue-950/50 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300'
-                    : 'bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-                }`}
-              >
-                {hideCompleted ? 'Completed hidden' : 'Hide completed'}
-              </button>
+                    {activeFilterCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={resetAllFilters}
+                        aria-label="Clear active filters"
+                        title="Reset all filters"
+                        className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-md transition-colors shrink-0"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
 
-              <button
-                type="button"
-                aria-pressed={myTasksOnly}
-                onClick={() => setMyTasksOnly(!myTasksOnly)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
-                  myTasksOnly
-                    ? 'bg-blue-50 dark:bg-blue-950/50 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300'
-                    : 'bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-                }`}
-              >
-                My Tasks Only
-              </button>
+                    {filtersOpen && (
+                      <div
+                        role="dialog"
+                        aria-label="Task filters"
+                        className="absolute left-0 top-full mt-2 w-72 sm:w-80 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-lg z-30 p-4 space-y-4"
+                      >
+                        <div className="space-y-2">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                            Priority
+                          </div>
+                          <div
+                            role="group"
+                            aria-label="Filter by priority"
+                            className="grid grid-cols-5 gap-1 p-1 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
+                          >
+                            {(['all', 'urgent', 'high', 'medium', 'low'] as const).map((level) => {
+                              const active = priorityFilter === level;
+                              return (
+                                <button
+                                  key={level}
+                                  type="button"
+                                  onClick={() => setPriorityFilter(level)}
+                                  className={`px-1.5 py-1 text-[11px] font-medium rounded-md transition-colors capitalize whitespace-nowrap ${
+                                    active
+                                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
+                                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                                  }`}
+                                >
+                                  {level}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                            Visibility
+                          </div>
+                          <div className="space-y-2">
+                            <label className="flex items-start gap-2.5 p-2 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={hideCompleted}
+                                onChange={(e) => setHideCompleted(e.target.checked)}
+                                className="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                              />
+                              <div className="min-w-0">
+                                <div className="text-xs font-medium text-slate-900 dark:text-slate-100">
+                                  Hide completed
+                                </div>
+                                <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                                  Conceal tasks already marked complete
+                                </div>
+                              </div>
+                            </label>
+
+                            <label className="flex items-start gap-2.5 p-2 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={myTasksOnly}
+                                onChange={(e) => setMyTasksOnly(e.target.checked)}
+                                className="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                              />
+                              <div className="min-w-0">
+                                <div className="text-xs font-medium text-slate-900 dark:text-slate-100">
+                                  My Tasks Only
+                                </div>
+                                <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                                  Show only tasks assigned to you
+                                </div>
+                              </div>
+                            </label>
+                          </div>
+                        </div>
+
+                        <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+                          <button
+                            type="button"
+                            disabled={activeFilterCount === 0}
+                            onClick={resetAllFilters}
+                            className="text-xs font-medium text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 disabled:opacity-40 disabled:pointer-events-none whitespace-nowrap"
+                          >
+                            Reset filters
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFiltersOpen(false)}
+                            className="px-3 py-1 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors whitespace-nowrap"
+                          >
+                            Done
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="flex items-center gap-3 shrink-0">

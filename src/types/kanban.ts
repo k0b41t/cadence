@@ -3,7 +3,8 @@ import type { Timestamp } from 'firebase/firestore';
 export type Priority = 'low' | 'medium' | 'high' | 'urgent';
 export type ThemeMode = 'light' | 'dark';
 export type BoardStatus = 'active' | 'archived';
-export type BoardRole = 'viewer' | 'contributor' | 'editor' | 'manager';
+export type BuiltInBoardRole = 'viewer' | 'contributor' | 'editor' | 'manager';
+export type BoardRole = BuiltInBoardRole | 'custom';
 
 export const ID_REGEX = /^[a-zA-Z0-9_\-]+$/;
 
@@ -17,6 +18,8 @@ export const LIMITS = {
   BOARD_TITLE_MAX: 80,
   BOARD_DESC_MAX: 300,
   BOARD_BG_URL_MAX: 500,
+  BOARD_CUSTOM_ROLES_MAX: 8,
+  CUSTOM_ROLE_NAME_MAX: 40,
   COLUMN_TITLE_MAX: 50,
   COLUMN_WIP_MAX: 100,
   COLUMN_COLOR_RULES_MAX: 6,
@@ -68,6 +71,13 @@ export interface BoardPermissions {
   canManageColumns: boolean;
 }
 
+export const BUILTIN_ROLE_KEYS: BuiltInBoardRole[] = [
+  'viewer',
+  'contributor',
+  'editor',
+  'manager',
+];
+
 export const ROLE_PRESETS: Record<
   BoardRole,
   { label: string; description: string; permissions: BoardPermissions }
@@ -116,7 +126,129 @@ export const ROLE_PRESETS: Record<
       canManageColumns: true,
     },
   },
+  custom: {
+    label: 'Custom',
+    description: 'Custom permission set (does not match a saved role)',
+    permissions: {
+      canView: true,
+      canCreateTasks: false,
+      canEditTasks: false,
+      canDeleteTasks: false,
+      canManageColumns: false,
+    },
+  },
 };
+
+export interface BoardCustomRole {
+  id: string;
+  name: string;
+  canCreateTasks: boolean;
+  canEditTasks: boolean;
+  canDeleteTasks: boolean;
+  canManageColumns: boolean;
+}
+
+export interface PermissionShape {
+  canCreateTasks: boolean;
+  canEditTasks: boolean;
+  canDeleteTasks: boolean;
+  canManageColumns: boolean;
+}
+
+export function permissionsMatch(a: PermissionShape, b: PermissionShape): boolean {
+  return (
+    a.canCreateTasks === b.canCreateTasks &&
+    a.canEditTasks === b.canEditTasks &&
+    a.canDeleteTasks === b.canDeleteTasks &&
+    a.canManageColumns === b.canManageColumns
+  );
+}
+
+export interface ResolvedBoardRole {
+  role: BoardRole;
+  customRoleId?: string;
+  customRoleName?: string;
+  selectValue: string;
+  label: string;
+  description: string;
+}
+
+export function resolveRoleFromPermissions(
+  perms: PermissionShape,
+  customRoles: BoardCustomRole[] = []
+): ResolvedBoardRole {
+  for (const key of BUILTIN_ROLE_KEYS) {
+    if (permissionsMatch(perms, ROLE_PRESETS[key].permissions)) {
+      return {
+        role: key,
+        selectValue: key,
+        label: ROLE_PRESETS[key].label,
+        description: ROLE_PRESETS[key].description,
+      };
+    }
+  }
+
+  for (const cr of customRoles) {
+    if (permissionsMatch(perms, cr)) {
+      return {
+        role: 'custom',
+        customRoleId: cr.id,
+        customRoleName: cr.name,
+        selectValue: `custom:${cr.id}`,
+        label: cr.name,
+        description: `Custom board role (${cr.name})`,
+      };
+    }
+  }
+
+  return {
+    role: 'custom',
+    selectValue: 'custom',
+    label: ROLE_PRESETS.custom.label,
+    description: ROLE_PRESETS.custom.description,
+  };
+}
+
+export function getRoleSelectionForValue(
+  selectValue: string,
+  currentPerms: BoardPermissions,
+  customRoles: BoardCustomRole[] = []
+): { role: BoardRole; customRoleName?: string; permissions: BoardPermissions } {
+  if (
+    selectValue === 'viewer' ||
+    selectValue === 'contributor' ||
+    selectValue === 'editor' ||
+    selectValue === 'manager'
+  ) {
+    return {
+      role: selectValue,
+      permissions: { ...ROLE_PRESETS[selectValue].permissions },
+    };
+  }
+
+  if (selectValue.startsWith('custom:')) {
+    const targetId = selectValue.slice('custom:'.length);
+    const matched = customRoles.find((cr) => cr.id === targetId);
+    if (matched) {
+      return {
+        role: 'custom',
+        customRoleName: matched.name,
+        permissions: {
+          canView: true,
+          canCreateTasks: matched.canCreateTasks,
+          canEditTasks: matched.canEditTasks,
+          canDeleteTasks: matched.canDeleteTasks,
+          canManageColumns: matched.canManageColumns,
+        },
+      };
+    }
+  }
+
+  return {
+    role: 'custom',
+    permissions: { ...currentPerms, canView: true },
+  };
+}
 
 export interface AdminRecord {
   uid: string;
@@ -170,6 +302,7 @@ export interface BoardRef {
   boardTitle: string;
   boardOwnerId: string;
   role: BoardRole;
+  customRoleName?: string;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }
@@ -184,6 +317,7 @@ export interface Board {
   backgroundImageUrl?: string;
   surfaceOpacityEnabled?: boolean;
   surfaceOpacity?: number;
+  customRoles?: BoardCustomRole[];
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }
@@ -194,6 +328,7 @@ export interface BoardMember {
   ownerId: string;
   displayName: string;
   role: BoardRole;
+  customRoleName?: string;
   canView: boolean;
   canCreateTasks: boolean;
   canEditTasks: boolean;
@@ -211,6 +346,7 @@ export interface BoardInvite {
   createdBy: string;
   label: string;
   role: BoardRole;
+  customRoleName?: string;
   canCreateTasks: boolean;
   canEditTasks: boolean;
   canDeleteTasks: boolean;
