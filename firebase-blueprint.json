@@ -371,7 +371,7 @@
         },
         "customRoles": {
           "type": "array",
-          "description": "Up to 8 board-specific custom named roles with assigned utility permissions."
+          "description": "Up to 8 board-specific custom named roles with assigned utility permissions (including canAssignTasks)."
         },
         "createdAt": {
           "type": "string",
@@ -447,6 +447,10 @@
         "canManageColumns": {
           "type": "boolean",
           "description": "Allows creating, renaming, reordering, and deleting columns and WIP limits."
+        },
+        "canAssignTasks": {
+          "type": "boolean",
+          "description": "Allows assigning task assignees and reviewers."
         },
         "inviteId": {
           "type": "string",
@@ -556,6 +560,10 @@
         "canManageColumns": {
           "type": "boolean",
           "description": "Grants column and WIP limit management."
+        },
+        "canAssignTasks": {
+          "type": "boolean",
+          "description": "Grants permission to assign task assignees and reviewers."
         },
         "active": {
           "type": "boolean",
@@ -700,6 +708,7 @@
         "canEditTasks": { "type": "boolean" },
         "canDeleteTasks": { "type": "boolean" },
         "canManageColumns": { "type": "boolean" },
+        "canAssignTasks": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

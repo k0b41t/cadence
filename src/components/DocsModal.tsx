@@ -460,7 +460,7 @@ await ensureUserAndStarterWorkspace(nextUser, adminStatus.isAdmin || wlStatus.ca
       {
         heading: '3. Board Creator Collaborator Permissions',
         paragraphs: [
-          'Inside any board’s Share & Permissions modal, the Board Creator chooses exactly what added collaborators or invite links can do: Create tasks, Edit & move tasks, Delete tasks, and Add & manage columns—and can toggle those permissions live at any time.',
+          'Inside any board’s Share & Permissions modal, the Board Creator chooses exactly what added collaborators or invite links can do: Create tasks, Edit & move tasks, Delete tasks, Add & manage columns, and Add assignee / reviewer—and can toggle those permissions live at any time. Board Creators automatically receive all permissions, and Board Manager includes Add assignee / reviewer by default.',
         ],
       },
     ],

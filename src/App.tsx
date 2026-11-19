@@ -79,6 +79,7 @@ import {
   updateUserTheme,
 } from './lib/kanbanService';
 import {
+  hasAssignPermission,
   ID_REGEX,
   isColumnReviewGated,
   LIMITS,
@@ -686,6 +687,7 @@ function WorkspaceApp() {
         canEditTasks: false,
         canDeleteTasks: false,
         canManageColumns: false,
+        canAssignTasks: false,
         canManageSharing: false,
         roleLabel: 'Viewer',
       };
@@ -698,6 +700,7 @@ function WorkspaceApp() {
         canEditTasks: true,
         canDeleteTasks: true,
         canManageColumns: true,
+        canAssignTasks: true,
         canManageSharing: true,
         roleLabel: 'Admin',
       };
@@ -709,6 +712,7 @@ function WorkspaceApp() {
         canEditTasks: !isBoardArchived,
         canDeleteTasks: !isBoardArchived,
         canManageColumns: !isBoardArchived,
+        canAssignTasks: !isBoardArchived,
         canManageSharing: true,
         roleLabel: 'Creator',
       };
@@ -721,6 +725,7 @@ function WorkspaceApp() {
         canEditTasks: false,
         canDeleteTasks: false,
         canManageColumns: false,
+        canAssignTasks: false,
         canManageSharing: false,
         roleLabel: 'Viewer',
       };
@@ -731,6 +736,7 @@ function WorkspaceApp() {
       canEditTasks: !isBoardArchived && myMembership.canEditTasks,
       canDeleteTasks: !isBoardArchived && myMembership.canDeleteTasks,
       canManageColumns: !isBoardArchived && myMembership.canManageColumns,
+      canAssignTasks: !isBoardArchived && hasAssignPermission(myMembership),
       canManageSharing: false,
       roleLabel: resolveRoleFromPermissions(myMembership, activeBoard.customRoles ?? []).label,
     };
@@ -1870,6 +1876,7 @@ function WorkspaceApp() {
           columns={columns}
           tasks={tasks}
           assigneeOptions={assigneeOptions}
+          canAssignTasks={effectivePermissions.canAssignTasks}
           onClose={() => setCreateTaskOpen(false)}
         />
       )}
@@ -1888,6 +1895,7 @@ function WorkspaceApp() {
           canCreateTasks={effectivePermissions.canCreateTasks}
           canEditTasks={effectivePermissions.canEditTasks}
           canDeleteTasks={effectivePermissions.canDeleteTasks}
+          canAssignTasks={effectivePermissions.canAssignTasks}
           initialFocusChat={taskModalFocusChat}
           onToggleSubtask={handleToggleSubtask}
           onClose={() => {

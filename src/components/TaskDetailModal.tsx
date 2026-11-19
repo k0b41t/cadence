@@ -31,6 +31,7 @@ import {
   subscribeSubtasks,
   toggleSubtaskCompleted,
   toggleTaskReviewed,
+  updateTaskAssignee,
   updateTaskDetails,
   updateTaskReviewer,
 } from '../lib/kanbanService';
@@ -61,6 +62,7 @@ interface TaskDetailModalProps {
   canCreateTasks: boolean;
   canEditTasks: boolean;
   canDeleteTasks: boolean;
+  canAssignTasks: boolean;
   initialFocusChat?: boolean;
   onToggleSubtask?: (task: Task, subtask: Subtask, currentSubtasks: Subtask[]) => Promise<void> | void;
   onClose: () => void;
@@ -79,6 +81,7 @@ export function TaskDetailModal({
   canCreateTasks,
   canEditTasks,
   canDeleteTasks,
+  canAssignTasks,
   initialFocusChat = false,
   onToggleSubtask,
   onClose,
@@ -116,6 +119,7 @@ export function TaskDetailModal({
   const [reviewed, setReviewed] = useState(Boolean(task.reviewed));
   const [reviewedAt, setReviewedAt] = useState(task.reviewedAt ?? '');
   const [reviewedBy, setReviewedBy] = useState(task.reviewedBy ?? '');
+  const [savingAssignee, setSavingAssignee] = useState(false);
   const [savingReview, setSavingReview] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -276,7 +280,7 @@ export function TaskDetailModal({
         completed,
         completedAt,
         placedOnColumnAt,
-        assigneeId,
+        assigneeId: canAssignTasks ? assigneeId : (task.assigneeId ?? ''),
         notificationsEnabled,
         links: finalLinks,
         milestones: finalMilestones,
@@ -325,8 +329,25 @@ export function TaskDetailModal({
     }
   };
 
+  const handleAssigneeChange = async (nextAssigneeId: string) => {
+    if (!canAssignTasks || savingAssignee) return;
+    const prevAssigneeId = assigneeId;
+    setAssigneeId(nextAssigneeId);
+    if (canEditTasks) return;
+    setSavingAssignee(true);
+    setErrorMsg(null);
+    try {
+      await updateTaskAssignee(board.id, task.id, nextAssigneeId);
+    } catch (err) {
+      setAssigneeId(prevAssigneeId);
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to update assignee.');
+    } finally {
+      setSavingAssignee(false);
+    }
+  };
+
   const handleReviewerChange = async (nextReviewerId: string) => {
-    if (!canEditTasks || savingReview) return;
+    if (!canAssignTasks || savingReview) return;
     const prevReviewerId = reviewerId;
     setReviewerId(nextReviewerId);
     setSavingReview(true);
@@ -342,7 +363,7 @@ export function TaskDetailModal({
   };
 
   const handleToggleReviewed = async () => {
-    if (!canEditTasks || savingReview) return;
+    if (!(canEditTasks || canAssignTasks) || savingReview) return;
     const prevReviewed = reviewed;
     const prevReviewedAt = reviewedAt;
     const prevReviewedBy = reviewedBy;
@@ -528,11 +549,12 @@ export function TaskDetailModal({
                   <label htmlFor="task-assignee-select" className="block text-xs font-medium text-slate-600 dark:text-slate-400">
                     Assignee
                   </label>
-                  {canEditTasks && assigneeId !== uid && assigneeOptions.some((opt) => opt.uid === uid) && (
+                  {canAssignTasks && assigneeId !== uid && assigneeOptions.some((opt) => opt.uid === uid) && (
                     <button
                       type="button"
-                      onClick={() => setAssigneeId(uid)}
-                      className="text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap"
+                      disabled={savingAssignee}
+                      onClick={() => void handleAssigneeChange(uid)}
+                      className="text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap disabled:opacity-50"
                     >
                       Assign to me
                     </button>
@@ -540,9 +562,9 @@ export function TaskDetailModal({
                 </div>
                 <select
                   id="task-assignee-select"
-                  disabled={!canEditTasks}
+                  disabled={!canAssignTasks || savingAssignee}
                   value={assigneeId}
-                  onChange={(e) => setAssigneeId(e.target.value)}
+                  onChange={(e) => void handleAssigneeChange(e.target.value)}
                   className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:opacity-60"
                 >
                   <option value="">Unassigned</option>
@@ -552,6 +574,11 @@ export function TaskDetailModal({
                     </option>
                   ))}
                 </select>
+                {canEditTasks && !canAssignTasks && (
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Requires &ldquo;Add assignee / reviewer&rdquo; permission.
+                  </p>
+                )}
               </div>
 
               <div className="space-y-1.5">
@@ -1096,7 +1123,7 @@ export function TaskDetailModal({
                   >
                     Reviewer
                   </label>
-                  {canEditTasks &&
+                  {canAssignTasks &&
                     reviewerId !== uid &&
                     assigneeOptions.some((opt) => opt.uid === uid) && (
                       <button
@@ -1111,7 +1138,7 @@ export function TaskDetailModal({
                 </div>
                 <select
                   id="task-reviewer-select"
-                  disabled={!canEditTasks || savingReview}
+                  disabled={!canAssignTasks || savingReview}
                   value={reviewerId}
                   onChange={(e) => void handleReviewerChange(e.target.value)}
                   className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:opacity-60"
@@ -1123,6 +1150,11 @@ export function TaskDetailModal({
                     </option>
                   ))}
                 </select>
+                {canEditTasks && !canAssignTasks && (
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Requires &ldquo;Add assignee / reviewer&rdquo; permission.
+                  </p>
+                )}
                 {reviewerId && assigneeId && reviewerId === assigneeId && (
                   <p className="text-[11px] text-amber-600 dark:text-amber-400">
                     Reviewer is currently the same person as the assignee.
@@ -1139,7 +1171,7 @@ export function TaskDetailModal({
                   role="switch"
                   aria-checked={reviewed}
                   aria-label="Mark task reviewed"
-                  disabled={!canEditTasks || savingReview}
+                  disabled={!(canEditTasks || canAssignTasks) || savingReview}
                   onClick={() => void handleToggleReviewed()}
                   className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 disabled:opacity-60 ${
                     reviewed
@@ -1194,7 +1226,7 @@ export function TaskDetailModal({
             )
           ) : (
             <span className="text-xs text-slate-500 dark:text-slate-400">
-              {!canEditTasks ? 'View-only access' : 'Task deletion restricted'}
+              {!canEditTasks ? (canAssignTasks ? 'Assign-only access' : 'View-only access') : 'Task deletion restricted'}
             </span>
           )}
 

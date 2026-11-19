@@ -70,6 +70,7 @@ export interface BoardPermissions {
   canEditTasks: boolean;
   canDeleteTasks: boolean;
   canManageColumns: boolean;
+  canAssignTasks: boolean;
 }
 
 export const BUILTIN_ROLE_KEYS: BuiltInBoardRole[] = [
@@ -92,6 +93,7 @@ export const ROLE_PRESETS: Record<
       canEditTasks: false,
       canDeleteTasks: false,
       canManageColumns: false,
+      canAssignTasks: false,
     },
   },
   contributor: {
@@ -103,6 +105,7 @@ export const ROLE_PRESETS: Record<
       canEditTasks: true,
       canDeleteTasks: false,
       canManageColumns: false,
+      canAssignTasks: false,
     },
   },
   editor: {
@@ -114,17 +117,19 @@ export const ROLE_PRESETS: Record<
       canEditTasks: true,
       canDeleteTasks: true,
       canManageColumns: false,
+      canAssignTasks: false,
     },
   },
   manager: {
     label: 'Board Manager',
-    description: 'Create, edit, delete tasks, plus add & manage columns',
+    description: 'Create, edit, delete tasks, assign people/reviewers, plus add & manage columns',
     permissions: {
       canView: true,
       canCreateTasks: true,
       canEditTasks: true,
       canDeleteTasks: true,
       canManageColumns: true,
+      canAssignTasks: true,
     },
   },
   custom: {
@@ -136,6 +141,7 @@ export const ROLE_PRESETS: Record<
       canEditTasks: false,
       canDeleteTasks: false,
       canManageColumns: false,
+      canAssignTasks: false,
     },
   },
 };
@@ -147,6 +153,7 @@ export interface BoardCustomRole {
   canEditTasks: boolean;
   canDeleteTasks: boolean;
   canManageColumns: boolean;
+  canAssignTasks?: boolean;
 }
 
 export interface PermissionShape {
@@ -154,6 +161,16 @@ export interface PermissionShape {
   canEditTasks: boolean;
   canDeleteTasks: boolean;
   canManageColumns: boolean;
+  canAssignTasks?: boolean;
+  role?: BoardRole;
+}
+
+export function hasAssignPermission(
+  item: { canAssignTasks?: boolean; role?: BoardRole } | null | undefined
+): boolean {
+  if (!item) return false;
+  if (typeof item.canAssignTasks === 'boolean') return item.canAssignTasks;
+  return item.role === 'manager';
 }
 
 export function permissionsMatch(a: PermissionShape, b: PermissionShape): boolean {
@@ -161,7 +178,8 @@ export function permissionsMatch(a: PermissionShape, b: PermissionShape): boolea
     a.canCreateTasks === b.canCreateTasks &&
     a.canEditTasks === b.canEditTasks &&
     a.canDeleteTasks === b.canDeleteTasks &&
-    a.canManageColumns === b.canManageColumns
+    a.canManageColumns === b.canManageColumns &&
+    hasAssignPermission(a) === hasAssignPermission(b)
   );
 }
 
@@ -240,6 +258,7 @@ export function getRoleSelectionForValue(
           canEditTasks: matched.canEditTasks,
           canDeleteTasks: matched.canDeleteTasks,
           canManageColumns: matched.canManageColumns,
+          canAssignTasks: Boolean(matched.canAssignTasks),
         },
       };
     }
@@ -338,6 +357,7 @@ export interface BoardMember {
   canEditTasks: boolean;
   canDeleteTasks: boolean;
   canManageColumns: boolean;
+  canAssignTasks?: boolean;
   inviteId?: string;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
@@ -357,6 +377,7 @@ export interface BoardInvite {
   canEditTasks: boolean;
   canDeleteTasks: boolean;
   canManageColumns: boolean;
+  canAssignTasks?: boolean;
   active: boolean;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
@@ -391,6 +412,7 @@ export interface PendingBoardGrant {
   canEditTasks: boolean;
   canDeleteTasks: boolean;
   canManageColumns: boolean;
+  canAssignTasks?: boolean;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }

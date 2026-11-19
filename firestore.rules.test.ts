@@ -26,6 +26,7 @@ const SPOOF_ADMIN = { uid: 'spoof_1', email: 'btuttle@orangeusd.org', email_veri
 const CREATOR = { uid: 'creator_a', email: 'creator@example.com', email_verified: true };
 const MEMBER_VIEWER = { uid: 'viewer_b', email: 'viewer@example.com', email_verified: true };
 const MEMBER_CONTRIB = { uid: 'contrib_c', email: 'contrib@example.com', email_verified: true };
+const MEMBER_MANAGER = { uid: 'manager_m', email: 'manager@example.com', email_verified: true };
 const OUTSIDER = { uid: 'outsider_d', email: 'outsider@example.com', email_verified: true };
 const UNWHITELISTED = { uid: 'blocked_e', email: 'blocked@example.com', email_verified: true };
 
@@ -110,6 +111,22 @@ async function runTests() {
       canEditTasks: true,
       canDeleteTasks: false,
       canManageColumns: false,
+      canAssignTasks: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    await setDoc(doc(db, 'boards', 'board_1', 'members', MEMBER_MANAGER.uid), {
+      uid: MEMBER_MANAGER.uid,
+      boardId: 'board_1',
+      ownerId: CREATOR.uid,
+      displayName: 'Board Manager',
+      role: 'manager',
+      canView: true,
+      canCreateTasks: true,
+      canEditTasks: true,
+      canDeleteTasks: true,
+      canManageColumns: true,
+      canAssignTasks: true,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -134,7 +151,7 @@ async function runTests() {
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
-    for (const allowedEmail of [CREATOR.email, MEMBER_VIEWER.email, MEMBER_CONTRIB.email, OUTSIDER.email]) {
+    for (const allowedEmail of [CREATOR.email, MEMBER_VIEWER.email, MEMBER_CONTRIB.email, MEMBER_MANAGER.email, OUTSIDER.email]) {
       await setDoc(doc(db, 'whitelist', allowedEmail), {
         email: allowedEmail,
         label: 'Test Cohort',
@@ -160,6 +177,7 @@ async function runTests() {
   const dbCreator = testEnv.authenticatedContext(CREATOR.uid, { email: CREATOR.email, email_verified: true }).firestore();
   const dbViewer = testEnv.authenticatedContext(MEMBER_VIEWER.uid, { email: MEMBER_VIEWER.email, email_verified: true }).firestore();
   const dbContrib = testEnv.authenticatedContext(MEMBER_CONTRIB.uid, { email: MEMBER_CONTRIB.email, email_verified: true }).firestore();
+  const dbManager = testEnv.authenticatedContext(MEMBER_MANAGER.uid, { email: MEMBER_MANAGER.email, email_verified: true }).firestore();
   const dbOutsider = testEnv.authenticatedContext(OUTSIDER.uid, { email: OUTSIDER.email, email_verified: true }).firestore();
   const dbBlocked = testEnv.authenticatedContext(UNWHITELISTED.uid, { email: UNWHITELISTED.email, email_verified: true }).firestore();
 
@@ -383,7 +401,27 @@ async function runTests() {
     })
   );
 
-  // Positive assertions: Admin sees all boards; Contributor creates task; Viewer posts task chat; Outsider redeems viewer invite atomically
+  // 18. Contributor Without canAssignTasks Assignment Attempt
+  await assertFails(
+    updateDoc(doc(dbContrib, 'boards', 'board_1', 'tasks', 'task_1'), {
+      assigneeId: MEMBER_CONTRIB.uid,
+      title: 'Existing Task',
+      description: '',
+      priority: 'medium',
+      tags: [],
+      dueDate: '',
+      completed: false,
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertFails(
+    updateDoc(doc(dbContrib, 'boards', 'board_1', 'tasks', 'task_1'), {
+      reviewerId: MEMBER_CONTRIB.uid,
+      updatedAt: serverTimestamp(),
+    })
+  );
+
+  // Positive assertions: Admin sees all boards; Contributor creates unassigned task; Creator & Board Manager assign tasks/reviewers; Viewer posts task chat; Outsider redeems viewer invite atomically
   await assertSucceeds(getDocs(collection(dbAdmin, 'boards')));
   await assertSucceeds(getDoc(doc(dbAdmin, 'boards', 'board_1')));
   await assertSucceeds(
@@ -393,7 +431,7 @@ async function runTests() {
       columnId: 'col_1',
       ownerId: CREATOR.uid,
       createdBy: MEMBER_CONTRIB.uid,
-      assigneeId: MEMBER_CONTRIB.uid,
+      assigneeId: '',
       title: 'Allowed Task',
       description: '',
       priority: 'medium',
@@ -402,6 +440,24 @@ async function runTests() {
       dueDate: '',
       completed: false,
       createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(
+    updateDoc(doc(dbCreator, 'boards', 'board_1', 'tasks', 'task_1'), {
+      assigneeId: MEMBER_CONTRIB.uid,
+      title: 'Existing Task',
+      description: '',
+      priority: 'medium',
+      tags: [],
+      dueDate: '',
+      completed: false,
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(
+    updateDoc(doc(dbManager, 'boards', 'board_1', 'tasks', 'task_1'), {
+      reviewerId: MEMBER_MANAGER.uid,
       updatedAt: serverTimestamp(),
     })
   );

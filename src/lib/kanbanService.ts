@@ -20,6 +20,7 @@ import { db, handleFirestoreError, OperationType } from './firebase';
 import {
   BOARD_TEMPLATES,
   BOOTSTRAP_ADMIN_EMAIL,
+  hasAssignPermission,
   ID_REGEX,
   LIMITS,
   type AccessCode,
@@ -1048,6 +1049,7 @@ export async function importBoardFromParsed(
       canEditTasks: Boolean(cr.canEditTasks),
       canDeleteTasks: Boolean(cr.canDeleteTasks),
       canManageColumns: Boolean(cr.canManageColumns),
+      canAssignTasks: Boolean(cr.canAssignTasks),
     }));
 
   const boardPayload: Record<string, unknown> = {
@@ -1336,6 +1338,7 @@ export async function cloneBoard(
         canEditTasks: Boolean(cr.canEditTasks),
         canDeleteTasks: Boolean(cr.canDeleteTasks),
         canManageColumns: Boolean(cr.canManageColumns),
+        canAssignTasks: Boolean(cr.canAssignTasks),
       }));
   }
 
@@ -1577,6 +1580,7 @@ export async function updateBoardCustomRoles(
         canEditTasks: Boolean(cr.canEditTasks),
         canDeleteTasks: Boolean(cr.canDeleteTasks),
         canManageColumns: Boolean(cr.canManageColumns),
+        canAssignTasks: Boolean(cr.canAssignTasks),
       };
     });
 
@@ -2033,6 +2037,28 @@ export async function toggleTaskNotifications(
   }
 }
 
+export async function updateTaskAssignee(
+  boardId: string,
+  taskId: string,
+  assigneeId: string
+): Promise<void> {
+  assertValidId(boardId, 'boardId');
+  assertValidId(taskId, 'taskId');
+  if (assigneeId) {
+    assertValidId(assigneeId, 'assigneeId');
+  }
+
+  const path = `boards/${boardId}/tasks/${taskId}`;
+  try {
+    await updateDoc(doc(db, 'boards', boardId, 'tasks', taskId), {
+      assigneeId,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
 export async function updateTaskReviewer(
   boardId: string,
   taskId: string,
@@ -2384,6 +2410,7 @@ export async function grantBoardAccessByEmail(
         canEditTasks: permissions.canEditTasks,
         canDeleteTasks: permissions.canDeleteTasks,
         canManageColumns: permissions.canManageColumns,
+        canAssignTasks: permissions.canAssignTasks,
         updatedAt: serverTimestamp(),
       });
     } else {
@@ -2400,6 +2427,7 @@ export async function grantBoardAccessByEmail(
         canEditTasks: permissions.canEditTasks,
         canDeleteTasks: permissions.canDeleteTasks,
         canManageColumns: permissions.canManageColumns,
+        canAssignTasks: permissions.canAssignTasks,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -2507,6 +2535,7 @@ export async function claimPendingBoardGrants(user: User): Promise<string[]> {
       canEditTasks: Boolean(grant.canEditTasks),
       canDeleteTasks: Boolean(grant.canDeleteTasks),
       canManageColumns: Boolean(grant.canManageColumns),
+      canAssignTasks: hasAssignPermission(grant),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -2577,6 +2606,7 @@ export async function grantBoardAccessByUid(
     canEditTasks: permissions.canEditTasks,
     canDeleteTasks: permissions.canDeleteTasks,
     canManageColumns: permissions.canManageColumns,
+    canAssignTasks: permissions.canAssignTasks,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
@@ -2623,6 +2653,7 @@ export async function updateMemberPermissions(
     canEditTasks: permissions.canEditTasks,
     canDeleteTasks: permissions.canDeleteTasks,
     canManageColumns: permissions.canManageColumns,
+    canAssignTasks: permissions.canAssignTasks,
     updatedAt: serverTimestamp(),
   });
   batch.update(doc(db, 'users', memberUid, 'boardRefs', board.id), {
@@ -2720,6 +2751,7 @@ export async function createBoardInvite(
       canEditTasks: permissions.canEditTasks,
       canDeleteTasks: permissions.canDeleteTasks,
       canManageColumns: permissions.canManageColumns,
+      canAssignTasks: permissions.canAssignTasks,
       active: true,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -2799,6 +2831,7 @@ export interface BoardInvitePreview {
   canEditTasks: boolean;
   canDeleteTasks: boolean;
   canManageColumns: boolean;
+  canAssignTasks: boolean;
 }
 
 export async function getBoardInvitePreview(
@@ -2828,6 +2861,7 @@ export async function getBoardInvitePreview(
       canEditTasks: inv.canEditTasks,
       canDeleteTasks: inv.canDeleteTasks,
       canManageColumns: inv.canManageColumns,
+      canAssignTasks: hasAssignPermission(inv),
     };
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, path);
@@ -2992,6 +3026,7 @@ export async function redeemBoardInvite(
     canEditTasks: invite.canEditTasks,
     canDeleteTasks: invite.canDeleteTasks,
     canManageColumns: invite.canManageColumns,
+    canAssignTasks: hasAssignPermission(invite),
     inviteId: invite.id,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),

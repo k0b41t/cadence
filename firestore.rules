@@ -109,7 +109,8 @@ service cloud.firestore {
       return assigneeId == ''
         || assigneeId == getBoard(boardId).data.ownerId
         || memberExists(boardId, assigneeId)
-        || exists(/databases/$(database)/documents/admins/$(assigneeId));
+        || exists(/databases/$(database)/documents/admins/$(assigneeId))
+        || (isAdmin() && assigneeId == request.auth.uid);
     }
 
     function canCreateTasksOnBoard(boardId) {
@@ -136,6 +137,30 @@ service cloud.firestore {
         || (memberExists(boardId, request.auth.uid) && getMember(boardId, request.auth.uid).data.canManageColumns == true);
     }
 
+    function canAssignTasksOnBoard(boardId) {
+      return isAdmin()
+        || isBoardOwner(boardId)
+        || (
+          memberExists(boardId, request.auth.uid)
+          && (
+            (('canAssignTasks' in getMember(boardId, request.auth.uid).data) && getMember(boardId, request.auth.uid).data.canAssignTasks == true)
+            || (!('canAssignTasks' in getMember(boardId, request.auth.uid).data) && getMember(boardId, request.auth.uid).data.role == 'manager')
+          )
+        );
+    }
+
+    function assigneeUnchanged() {
+      return (!('assigneeId' in incoming()) && !('assigneeId' in existing()))
+        || (('assigneeId' in incoming()) && ('assigneeId' in existing()) && incoming().assigneeId == existing().assigneeId)
+        || (!('assigneeId' in existing()) && ('assigneeId' in incoming()) && incoming().assigneeId == '');
+    }
+
+    function reviewerUnchanged() {
+      return (!('reviewerId' in incoming()) && !('reviewerId' in existing()))
+        || (('reviewerId' in incoming()) && ('reviewerId' in existing()) && incoming().reviewerId == existing().reviewerId)
+        || (!('reviewerId' in existing()) && ('reviewerId' in incoming()) && incoming().reviewerId == '');
+    }
+
     function inviteMatchesMember(boardId, inviteId, data) {
       return isValidId(inviteId)
         && exists(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId))
@@ -148,7 +173,11 @@ service cloud.firestore {
         && data.canCreateTasks == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canCreateTasks
         && data.canEditTasks == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canEditTasks
         && data.canDeleteTasks == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canDeleteTasks
-        && data.canManageColumns == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canManageColumns;
+        && data.canManageColumns == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canManageColumns
+        && (
+          ('canAssignTasks' in get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data && 'canAssignTasks' in data && data.canAssignTasks == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canAssignTasks) ||
+          (!('canAssignTasks' in get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data) && (!('canAssignTasks' in data) || data.canAssignTasks == (get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.role == 'manager')))
+        );
     }
 
     function pendingBoardMatchesMember(boardId, emailKey, data) {
@@ -164,7 +193,11 @@ service cloud.firestore {
         && data.canCreateTasks == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canCreateTasks
         && data.canEditTasks == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canEditTasks
         && data.canDeleteTasks == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canDeleteTasks
-        && data.canManageColumns == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canManageColumns;
+        && data.canManageColumns == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canManageColumns
+        && (
+          ('canAssignTasks' in get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data && 'canAssignTasks' in data && data.canAssignTasks == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canAssignTasks) ||
+          (!('canAssignTasks' in get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data) && (!('canAssignTasks' in data) || data.canAssignTasks == (get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.role == 'manager')))
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -204,6 +237,7 @@ service cloud.firestore {
         && data.canEditTasks is bool
         && data.canDeleteTasks is bool
         && data.canManageColumns is bool
+        && (!('canAssignTasks' in data) || data.canAssignTasks is bool)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -283,13 +317,14 @@ service cloud.firestore {
     function isValidBoardCustomRoleItem(item) {
       return item is map
         && item.keys().hasAll(['id', 'name', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns'])
-        && item.keys().hasOnly(['id', 'name', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns'])
+        && item.keys().hasOnly(['id', 'name', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'canAssignTasks'])
         && item.id is string && isValidId(item.id)
         && item.name is string && item.name.size() >= 1 && item.name.size() <= 40
         && item.canCreateTasks is bool
         && item.canEditTasks is bool
         && item.canDeleteTasks is bool
-        && item.canManageColumns is bool;
+        && item.canManageColumns is bool
+        && (!('canAssignTasks' in item) || item.canAssignTasks is bool);
     }
 
     function isValidBoardCustomRoles(roles) {
@@ -325,6 +360,7 @@ service cloud.firestore {
         && data.canEditTasks is bool
         && data.canDeleteTasks is bool
         && data.canManageColumns is bool
+        && (!('canAssignTasks' in data) || data.canAssignTasks is bool)
         && (!('inviteId' in data) || isValidOptionalId(data.inviteId))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -344,6 +380,7 @@ service cloud.firestore {
         && data.canEditTasks is bool
         && data.canDeleteTasks is bool
         && data.canManageColumns is bool
+        && (!('canAssignTasks' in data) || data.canAssignTasks is bool)
         && data.active is bool
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -657,7 +694,7 @@ service cloud.firestore {
           && isValidEmailKey(emailKey)
           && isValidId(boardId)
           && incoming().keys().hasAll(['boardId', 'email', 'emailHash', 'boardTitle', 'ownerId', 'createdBy', 'role', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'createdAt', 'updatedAt'])
-          && incoming().keys().hasOnly(['boardId', 'email', 'emailHash', 'boardTitle', 'ownerId', 'createdBy', 'role', 'customRoleName', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['boardId', 'email', 'emailHash', 'boardTitle', 'ownerId', 'createdBy', 'role', 'customRoleName', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'canAssignTasks', 'createdAt', 'updatedAt'])
           && isValidPendingBoardGrant(incoming(), emailKey, boardId)
           && incoming().createdBy == request.auth.uid
           && incoming().createdAt == request.time
@@ -677,7 +714,7 @@ service cloud.firestore {
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && (isAdmin() || (isBoardOwner(boardId) && isBoardActive(boardId)))
-          && incoming().diff(existing()).affectedKeys().hasOnly(['boardTitle', 'role', 'customRoleName', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'updatedAt']);
+          && incoming().diff(existing()).affectedKeys().hasOnly(['boardTitle', 'role', 'customRoleName', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'canAssignTasks', 'updatedAt']);
 
         allow delete: if isSignedIn()
           && isValidEmailKey(emailKey)
@@ -883,7 +920,7 @@ service cloud.firestore {
           && isValidId(boardId)
           && isValidId(memberId)
           && incoming().keys().hasAll(['uid', 'boardId', 'ownerId', 'displayName', 'role', 'canView', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'createdAt', 'updatedAt'])
-          && incoming().keys().hasOnly(['uid', 'boardId', 'ownerId', 'displayName', 'role', 'customRoleName', 'canView', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'inviteId', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['uid', 'boardId', 'ownerId', 'displayName', 'role', 'customRoleName', 'canView', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'canAssignTasks', 'inviteId', 'createdAt', 'updatedAt'])
           && isValidBoardMember(incoming(), boardId, memberId)
           && incoming().canView == true
           && incoming().createdAt == request.time
@@ -926,6 +963,7 @@ service cloud.firestore {
             'canEditTasks',
             'canDeleteTasks',
             'canManageColumns',
+            'canAssignTasks',
             'updatedAt'
           ]);
 
@@ -989,7 +1027,7 @@ service cloud.firestore {
           && isValidId(boardId)
           && isValidId(inviteId)
           && incoming().keys().hasAll(['id', 'boardId', 'ownerId', 'createdBy', 'label', 'role', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'active', 'createdAt', 'updatedAt'])
-          && incoming().keys().hasOnly(['id', 'boardId', 'boardTitle', 'joinCode', 'ownerId', 'createdBy', 'label', 'role', 'customRoleName', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'active', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'boardId', 'boardTitle', 'joinCode', 'ownerId', 'createdBy', 'label', 'role', 'customRoleName', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'canAssignTasks', 'active', 'createdAt', 'updatedAt'])
           && isValidBoardInvite(incoming(), boardId, inviteId)
           && incoming().createdBy == request.auth.uid
           && incoming().createdAt == request.time
@@ -1091,6 +1129,10 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/boards/$(boardId)/columns/$(incoming().columnId))
           && isValidAssignee(boardId, incoming().assigneeId)
           && (!('reviewerId' in incoming()) || isValidAssignee(boardId, incoming().reviewerId))
+          && (
+            (incoming().assigneeId == '' && (!('reviewerId' in incoming()) || incoming().reviewerId == ''))
+            || canAssignTasksOnBoard(boardId)
+          )
           && (isAdmin() || (isBoardActive(boardId) && canCreateTasksOnBoard(boardId)));
 
         allow update: if isAllowedWorkspaceUser()
@@ -1105,16 +1147,18 @@ service cloud.firestore {
           && incoming().updatedAt == request.time
           && exists(/databases/$(database)/documents/boards/$(boardId)/columns/$(incoming().columnId))
           && (
-            !('assigneeId' in incoming())
-            || incoming().assigneeId == ''
-            || (('assigneeId' in existing()) && incoming().assigneeId == existing().assigneeId)
-            || isValidAssignee(boardId, incoming().assigneeId)
+            assigneeUnchanged()
+            || (
+              canAssignTasksOnBoard(boardId)
+              && isValidAssignee(boardId, incoming().assigneeId)
+            )
           )
           && (
-            !('reviewerId' in incoming())
-            || incoming().reviewerId == ''
-            || (('reviewerId' in existing()) && incoming().reviewerId == existing().reviewerId)
-            || isValidAssignee(boardId, incoming().reviewerId)
+            reviewerUnchanged()
+            || (
+              canAssignTasksOnBoard(boardId)
+              && isValidAssignee(boardId, incoming().reviewerId)
+            )
           )
           && (
             !('reviewedBy' in incoming())
@@ -1122,20 +1166,37 @@ service cloud.firestore {
             || (('reviewedBy' in existing()) && incoming().reviewedBy == existing().reviewedBy)
             || incoming().reviewedBy == request.auth.uid
           )
-          && (isAdmin() || (isBoardActive(boardId) && canEditTasksOnBoard(boardId)))
           && (
-            incoming().diff(existing()).affectedKeys().hasOnly(['columnId', 'position', 'placedOnColumnAt', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['columnId', 'position', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'completedAt', 'placedOnColumnAt', 'assigneeId', 'links', 'milestones', 'notificationsEnabled', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'completedAt', 'placedOnColumnAt', 'assigneeId', 'links', 'milestones', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'assigneeId', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'completedAt', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['notificationsEnabled', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['reviewerId', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['reviewed', 'reviewedAt', 'reviewedBy', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['reviewerId', 'reviewed', 'reviewedAt', 'reviewedBy', 'updatedAt'])
+            isAdmin()
+            || (
+              isBoardActive(boardId)
+              && (
+                (
+                  canEditTasksOnBoard(boardId)
+                  && (
+                    incoming().diff(existing()).affectedKeys().hasOnly(['columnId', 'position', 'placedOnColumnAt', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['columnId', 'position', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'completedAt', 'placedOnColumnAt', 'assigneeId', 'links', 'milestones', 'notificationsEnabled', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'completedAt', 'placedOnColumnAt', 'assigneeId', 'links', 'milestones', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'assigneeId', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'completedAt', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['notificationsEnabled', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['reviewed', 'reviewedAt', 'reviewedBy', 'updatedAt'])
+                  )
+                )
+                || (
+                  canAssignTasksOnBoard(boardId)
+                  && (
+                    incoming().diff(existing()).affectedKeys().hasOnly(['assigneeId', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['reviewerId', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['reviewed', 'reviewedAt', 'reviewedBy', 'updatedAt']) ||
+                    incoming().diff(existing()).affectedKeys().hasOnly(['reviewerId', 'reviewed', 'reviewedAt', 'reviewedBy', 'updatedAt'])
+                  )
+                )
+              )
+            )
           );
 
         allow delete: if isAllowedWorkspaceUser()

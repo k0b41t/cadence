@@ -24,6 +24,7 @@ interface CreateTaskModalProps {
   columns: Column[];
   tasks: Task[];
   assigneeOptions: Array<{ uid: string; label: string }>;
+  canAssignTasks: boolean;
   onClose: () => void;
 }
 
@@ -40,6 +41,7 @@ export function CreateTaskModal({
   columns,
   tasks,
   assigneeOptions,
+  canAssignTasks,
   onClose,
 }: CreateTaskModalProps) {
   const [title, setTitle] = useState('');
@@ -146,7 +148,7 @@ export function CreateTaskModal({
         position: maxPos + 1000,
         tags,
         dueDate,
-        assigneeId,
+        assigneeId: canAssignTasks ? assigneeId : '',
         placedOnColumnAt,
         links: finalLinks,
         milestones: finalMilestones,
@@ -246,7 +248,7 @@ export function CreateTaskModal({
                 <label htmlFor="new-task-assignee" className="block text-xs font-medium text-slate-600 dark:text-slate-400">
                   Assignee
                 </label>
-                {assigneeId !== uid && assigneeOptions.some((opt) => opt.uid === uid) && (
+                {canAssignTasks && assigneeId !== uid && assigneeOptions.some((opt) => opt.uid === uid) && (
                   <button
                     type="button"
                     onClick={() => setAssigneeId(uid)}
@@ -258,9 +260,10 @@ export function CreateTaskModal({
               </div>
               <select
                 id="new-task-assignee"
-                value={assigneeId}
+                disabled={!canAssignTasks}
+                value={canAssignTasks ? assigneeId : ''}
                 onChange={(e) => setAssigneeId(e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:opacity-60"
               >
                 <option value="">Unassigned</option>
                 {assigneeOptions.map((opt) => (
@@ -269,6 +272,11 @@ export function CreateTaskModal({
                   </option>
                 ))}
               </select>
+              {!canAssignTasks && (
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Requires &ldquo;Add assignee / reviewer&rdquo; permission.
+                </p>
+              )}
             </div>
           </div>
 

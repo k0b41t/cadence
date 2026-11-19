@@ -7,7 +7,7 @@ import {
   resolveBoardCode,
   type BoardInvitePreview,
 } from '../lib/kanbanService';
-import { ID_REGEX, LIMITS, ROLE_PRESETS } from '../types/kanban';
+import { hasAssignPermission, ID_REGEX, LIMITS, ROLE_PRESETS } from '../types/kanban';
 
 interface JoinBoardModalProps {
   user: User;
@@ -72,6 +72,7 @@ function summarizeInvitePermissions(preview: BoardInvitePreview): string {
   if (preview.canEditTasks) parts.push('Edit & move');
   if (preview.canDeleteTasks) parts.push('Delete tasks');
   if (preview.canManageColumns) parts.push('Manage columns');
+  if (hasAssignPermission(preview)) parts.push('Add assignee / reviewer');
   return parts.length > 0 ? parts.join(' · ') : 'View only';
 }
 

@@ -15,6 +15,7 @@ import {
 import {
   BUILTIN_ROLE_KEYS,
   getRoleSelectionForValue,
+  hasAssignPermission,
   LIMITS,
   permissionsMatch,
   resolveRoleFromPermissions,
@@ -45,10 +46,13 @@ const PERMISSION_FIELDS: ReadonlyArray<{
   { key: 'canEditTasks', label: 'Edit & move tasks', shortLabel: 'Edit & move' },
   { key: 'canDeleteTasks', label: 'Delete tasks', shortLabel: 'Delete tasks' },
   { key: 'canManageColumns', label: 'Add & manage columns', shortLabel: 'Manage columns' },
+  { key: 'canAssignTasks', label: 'Add assignee / reviewer', shortLabel: 'Assign/Reviewer' },
 ];
 
 function summarizePermissions(perms: PermissionShape): string {
-  const parts = PERMISSION_FIELDS.filter((f) => perms[f.key]).map((f) => f.shortLabel);
+  const parts = PERMISSION_FIELDS.filter((f) =>
+    f.key === 'canAssignTasks' ? hasAssignPermission(perms) : perms[f.key]
+  ).map((f) => f.shortLabel);
   return parts.length > 0 ? parts.join(' · ') : 'View only';
 }
 
@@ -96,6 +100,7 @@ export function ShareBoardModal({
     canEditTasks: false,
     canDeleteTasks: false,
     canManageColumns: false,
+    canAssignTasks: false,
   });
   const [savingRoles, setSavingRoles] = useState(false);
 
@@ -223,6 +228,7 @@ export function ShareBoardModal({
       canEditTasks: member.canEditTasks,
       canDeleteTasks: member.canDeleteTasks,
       canManageColumns: member.canManageColumns,
+      canAssignTasks: hasAssignPermission(member),
     };
     const sel = getRoleSelectionForValue(selectValue, currentPerms, customRoles);
     try {
@@ -244,13 +250,15 @@ export function ShareBoardModal({
   ) => {
     if (!canManageSharing || board.status !== 'active') return;
     setErrorMsg(null);
+    const currentAssign = hasAssignPermission(member);
     const nextPerms: BoardPermissions = {
       canView: true,
       canCreateTasks: member.canCreateTasks,
       canEditTasks: member.canEditTasks,
       canDeleteTasks: member.canDeleteTasks,
       canManageColumns: member.canManageColumns,
-      [field]: !member[field],
+      canAssignTasks: currentAssign,
+      [field]: field === 'canAssignTasks' ? !currentAssign : !member[field],
     };
 
     const nextResolved = resolveRoleFromPermissions(nextPerms, customRoles);
@@ -295,6 +303,7 @@ export function ShareBoardModal({
         canEditTasks: newRolePerms.canEditTasks,
         canDeleteTasks: newRolePerms.canDeleteTasks,
         canManageColumns: newRolePerms.canManageColumns,
+        canAssignTasks: Boolean(newRolePerms.canAssignTasks),
       };
       await updateBoardCustomRoles(board.id, [...customRoles, nextRole]);
       setSuccessMsg(`Created board role "${nextRole.name}".`);
@@ -654,7 +663,11 @@ export function ShareBoardModal({
                           <input
                             type="checkbox"
                             disabled={!canManageSharing || board.status !== 'active'}
-                            checked={member[key]}
+                            checked={
+                              key === 'canAssignTasks'
+                                ? hasAssignPermission(member)
+                                : member[key]
+                            }
                             onChange={() => handleToggleMemberPerm(member, key)}
                             className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
                           />
@@ -776,7 +789,7 @@ export function ShareBoardModal({
                       <label key={key} className="inline-flex items-center gap-1.5 cursor-pointer">
                         <input
                           type="checkbox"
-                          checked={newRolePerms[key]}
+                          checked={Boolean(newRolePerms[key])}
                           onChange={(e) =>
                             setNewRolePerms({ ...newRolePerms, [key]: e.target.checked })
                           }

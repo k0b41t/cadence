@@ -178,6 +178,7 @@ function normalizeCustomRoles(raw: unknown): BoardCustomRole[] {
       canEditTasks: Boolean(rec.canEditTasks),
       canDeleteTasks: Boolean(rec.canDeleteTasks),
       canManageColumns: Boolean(rec.canManageColumns),
+      canAssignTasks: Boolean(rec.canAssignTasks),
     });
   }
   return out;
