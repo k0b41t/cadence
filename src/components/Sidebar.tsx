@@ -275,9 +275,9 @@ export function Sidebar({
             onSelectBoard(board.id);
             onCloseMobile();
           }}
-          className="flex-1 min-w-0 flex items-center gap-2.5 pl-2.5 pr-1.5 py-2 text-sm text-left rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+          className="flex-1 min-w-0 flex items-center gap-2 pl-2.5 pr-1.5 py-2 text-xs text-left rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
         >
-          <RowIcon className="w-4 h-4 shrink-0" />
+          <RowIcon className="w-3.5 h-3.5 shrink-0" />
           <span className="truncate">{board.title}</span>
         </button>
 

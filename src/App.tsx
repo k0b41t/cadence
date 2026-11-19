@@ -1215,12 +1215,12 @@ function WorkspaceApp() {
               <Menu className="w-5 h-5" />
             </button>
 
-            <div className="flex items-center gap-2 text-sm min-w-0">
+            <div className="flex items-center gap-2 text-[13px] min-w-0">
               <span className="text-slate-400 dark:text-slate-500 hidden sm:inline whitespace-nowrap">
                 {workspacePage === 'admin' && isAdmin ? 'Admin' : 'Boards'}
               </span>
               <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">/</span>
-              <h1 className="font-display font-semibold text-slate-900 dark:text-slate-100 truncate">
+              <h1 className="font-display text-[13px] font-semibold text-slate-900 dark:text-slate-100 truncate">
                 {workspacePage === 'admin' && isAdmin
                   ? 'Workspace Access & Admin'
                   : activeBoard
