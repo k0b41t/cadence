@@ -419,6 +419,30 @@ export async function updateUserActiveBoard(uid: string, boardId: string): Promi
   }
 }
 
+export async function updateUserBoardOrder(uid: string, boardOrder: string[]): Promise<void> {
+  assertValidId(uid, 'userId');
+  const seen = new Set<string>();
+  const sanitizedOrder: string[] = [];
+  for (const rawId of boardOrder) {
+    const trimmed = typeof rawId === 'string' ? rawId.trim() : '';
+    if (!trimmed || trimmed.length > LIMITS.ID_MAX || !ID_REGEX.test(trimmed)) continue;
+    if (seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    sanitizedOrder.push(trimmed);
+    if (sanitizedOrder.length >= LIMITS.USER_BOARD_ORDER_MAX) break;
+  }
+
+  const path = `users/${uid}`;
+  try {
+    await updateDoc(doc(db, 'users', uid), {
+      boardOrder: sanitizedOrder,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
 export function subscribeUserProfile(
   uid: string,
   onData: (profile: UserProfile | null) => void

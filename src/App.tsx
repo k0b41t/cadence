@@ -66,6 +66,7 @@ import {
   toggleSubtaskCompleted,
   toggleTaskCompleted,
   updateUserActiveBoard,
+  updateUserBoardOrder,
   updateUserTheme,
 } from './lib/kanbanService';
 import {
@@ -126,6 +127,7 @@ function WorkspaceApp() {
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [boards, setBoards] = useState<Board[]>([]);
+  const [optimisticBoardOrder, setOptimisticBoardOrder] = useState<string[] | null>(null);
   const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
   const [columns, setColumns] = useState<Column[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -331,6 +333,7 @@ function WorkspaceApp() {
       if (p) {
         setProfile(p);
         setTheme(p.theme);
+        setOptimisticBoardOrder(null);
       }
     });
     const unsubBoards = subscribeAccessibleBoards(user.uid, isBootstrapAdmin, (nextBoards) => {
@@ -586,11 +589,29 @@ function WorkspaceApp() {
 
   const completedCount = useMemo(() => tasks.filter((t) => t.completed).length, [tasks]);
 
+  const effectiveBoardOrder = optimisticBoardOrder ?? profile?.boardOrder;
+
+  const orderedBoards = useMemo(() => {
+    if (!effectiveBoardOrder || effectiveBoardOrder.length === 0) return boards;
+    const rank = new Map<string, number>();
+    effectiveBoardOrder.forEach((id, idx) => {
+      if (!rank.has(id)) rank.set(id, idx);
+    });
+    return [...boards].sort((a, b) => {
+      const idxA = rank.get(a.id);
+      const idxB = rank.get(b.id);
+      if (idxA !== undefined && idxB !== undefined) return idxA - idxB;
+      if (idxA !== undefined) return -1;
+      if (idxB !== undefined) return 1;
+      return 0;
+    });
+  }, [boards, effectiveBoardOrder]);
+
   const boardMap = useMemo(() => {
     const map = new Map<string, Board>();
-    boards.forEach((b) => map.set(b.id, b));
+    orderedBoards.forEach((b) => map.set(b.id, b));
     return map;
-  }, [boards]);
+  }, [orderedBoards]);
 
   const upcomingNotificationsCount = useMemo(
     () => buildTaskNotifications(allTasks, boardMap, getTodayDateKey(), 7).length,
@@ -617,6 +638,13 @@ function WorkspaceApp() {
   const handleToggleTheme = async () => {
     const next: ThemeMode = theme === 'dark' ? 'light' : 'dark';
     await handleSetTheme(next);
+  };
+
+  const handleReorderBoards = async (nextOrder: string[]) => {
+    setOptimisticBoardOrder(nextOrder);
+    if (user && workspaceReady) {
+      await updateUserBoardOrder(user.uid, nextOrder);
+    }
   };
 
   const handleChangePalettes = (next: AppColorPalettes) => {
@@ -884,7 +912,7 @@ function WorkspaceApp() {
     <div className="h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex overflow-hidden">
       <Sidebar
         uid={user.uid}
-        boards={boards}
+        boards={orderedBoards}
         activeBoardId={activeBoardId}
         profile={profile}
         userEmail={user.email}
@@ -895,6 +923,7 @@ function WorkspaceApp() {
         mobileOpen={mobileSidebarOpen}
         onCloseMobile={() => setMobileSidebarOpen(false)}
         onSelectBoard={handleSelectBoard}
+        onReorderBoards={handleReorderBoards}
         onOpenNewBoard={() => setBoardModalState({ mode: 'create' })}
         onOpenJoinBoard={() => setJoinModalState({})}
         onOpenAdminPanel={() => setWorkspacePage('admin')}
@@ -1430,7 +1459,7 @@ function WorkspaceApp() {
         <NotificationsModal
           uid={user.uid}
           isAdmin={isAdmin}
-          boards={boards}
+          boards={orderedBoards}
           activeBoard={activeBoard}
           activeBoardCanEdit={effectivePermissions.canEditTasks}
           allTasks={allTasks}
@@ -1444,7 +1473,7 @@ function WorkspaceApp() {
           uid={user.uid}
           senderName={profile?.displayName || user.displayName || 'Team Member'}
           isAdmin={isAdmin}
-          boards={boards}
+          boards={orderedBoards}
           activeBoard={activeBoard}
           activeBoardColumns={columns}
           activeBoardTasks={tasks}

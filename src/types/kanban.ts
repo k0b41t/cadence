@@ -15,6 +15,7 @@ export const LIMITS = {
   USER_DISPLAY_NAME_MAX: 80,
   USER_PHOTO_URL_MAX: 500,
   USER_EMAIL_MAX: 254,
+  USER_BOARD_ORDER_MAX: 200,
   BOARD_TITLE_MAX: 80,
   BOARD_DESC_MAX: 300,
   BOARD_BG_URL_MAX: 500,
@@ -291,6 +292,7 @@ export interface UserProfile {
   displayName: string;
   photoUrl?: string;
   activeBoardId?: string;
+  boardOrder?: string[];
   theme: ThemeMode;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;

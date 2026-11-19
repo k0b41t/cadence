@@ -195,6 +195,10 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]*$"
         },
+        "boardOrder": {
+          "type": "array",
+          "description": "Optional per-user ordered list of up to 200 Board IDs for sidebar display."
+        },
         "theme": {
           "type": "string",
           "description": "Preferred UI color theme.",
