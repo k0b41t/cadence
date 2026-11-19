@@ -19,6 +19,7 @@ interface AccessDeniedViewProps {
   user: User;
   suspended: boolean;
   initialAccessCode?: string | null;
+  pendingBoardInvite?: { boardId: string; inviteId: string } | null;
   initialError?: string | null;
   theme: ThemeMode;
   onToggleTheme: () => void;
@@ -32,6 +33,7 @@ export function AccessDeniedView({
   user,
   suspended,
   initialAccessCode = null,
+  pendingBoardInvite = null,
   initialError = null,
   theme,
   onToggleTheme,
@@ -157,6 +159,12 @@ export function AccessDeniedView({
                 : 'Your email is not on the workspace whitelist yet. Enter an admin-issued access code below to join automatically, or ask an administrator to whitelist your address.'}
             </p>
           </div>
+
+          {pendingBoardInvite && !suspended && (
+            <div className="text-xs text-blue-800 dark:text-blue-200 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-2.5">
+              A Board invite is waiting for you and will open automatically once your workspace access is verified.
+            </div>
+          )}
 
           {errorMsg && (
             <div

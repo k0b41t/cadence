@@ -15,6 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import { AccessDeniedView } from './components/AccessDeniedView';
+import { AddUsersModal } from './components/AddUsersModal';
 import { AdminPage } from './components/AdminPage';
 import { AllChatsModal } from './components/AllChatsModal';
 import { BoardModal } from './components/BoardModal';
@@ -47,12 +48,14 @@ import {
 import {
   checkIsAdmin,
   checkUserWhitelistAccess,
+  claimPendingBoardGrants,
   createColumn,
   createTask,
   ensureUserAndStarterWorkspace,
   getTodayDateKey,
   moveTask,
   redeemAccessCode,
+  redeemBoardInvite,
   subscribeAccessibleBoards,
   subscribeAllBoardsMessages,
   subscribeAllBoardsTasks,
@@ -65,6 +68,7 @@ import {
   subscribeUserProfile,
   toggleSubtaskCompleted,
   toggleTaskCompleted,
+  tryWhitelistFromBoardInvite,
   updateUserActiveBoard,
   updateUserBoardOrder,
   updateUserTheme,
@@ -96,7 +100,74 @@ function computeInsertPosition(sortedTasks: Task[], insertIndex: number): number
   return (prev + next) / 2;
 }
 
+const PENDING_ACCESS_STORAGE_KEY = 'cadence_pending_access';
+const PENDING_JOIN_STORAGE_KEY = 'cadence_pending_join';
+
+function readStoredPendingJoin(): { boardId: string; inviteId: string } | null {
+  if (typeof window === 'undefined') return null;
+  const raw = window.sessionStorage.getItem(PENDING_JOIN_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { boardId?: unknown; inviteId?: unknown };
+    if (typeof parsed.boardId === 'string' && typeof parsed.inviteId === 'string' && parsed.boardId && parsed.inviteId) {
+      return { boardId: parsed.boardId, inviteId: parsed.inviteId };
+    }
+  } catch {
+    // ignore malformed session storage
+  }
+  return null;
+}
+
+function readInitialInviteParams(): {
+  accessCode: string | null;
+  boardInvite: { boardId: string; inviteId: string } | null;
+} {
+  if (typeof window === 'undefined') {
+    return { accessCode: null, boardInvite: null };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  let mutatedUrl = false;
+
+  const fromUrlAccess = params.get('access')?.trim().toUpperCase();
+  if (fromUrlAccess) {
+    window.sessionStorage.setItem(PENDING_ACCESS_STORAGE_KEY, fromUrlAccess);
+    params.delete('access');
+    mutatedUrl = true;
+  }
+
+  const rawJoin = params.get('join')?.trim() ?? '';
+  const rawCode = params.get('code')?.trim() ?? '';
+  let parsedBoardInvite: { boardId: string; inviteId: string } | null = null;
+  if (rawJoin && rawCode) {
+    parsedBoardInvite = { boardId: rawJoin, inviteId: rawCode };
+  } else if (rawJoin && rawJoin.includes(':')) {
+    const [b, c] = rawJoin.split(':').map((s) => s.trim());
+    if (b && c) parsedBoardInvite = { boardId: b, inviteId: c };
+  }
+  if (parsedBoardInvite) {
+    window.sessionStorage.setItem(PENDING_JOIN_STORAGE_KEY, JSON.stringify(parsedBoardInvite));
+    params.delete('join');
+    params.delete('code');
+    mutatedUrl = true;
+  }
+
+  if (mutatedUrl) {
+    const remaining = params.toString();
+    const nextUrl = remaining
+      ? `${window.location.pathname}?${remaining}`
+      : window.location.pathname;
+    window.history.replaceState({}, '', nextUrl);
+  }
+
+  return {
+    accessCode: fromUrlAccess || window.sessionStorage.getItem(PENDING_ACCESS_STORAGE_KEY) || null,
+    boardInvite: parsedBoardInvite || readStoredPendingJoin(),
+  };
+}
+
 function WorkspaceApp() {
+  const initialInvites = useMemo(() => readInitialInviteParams(), []);
   const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -105,22 +176,11 @@ function WorkspaceApp() {
   const [accessStatus, setAccessStatus] = useState<'checking' | 'granted' | 'denied'>('checking');
   const [accessSuspended, setAccessSuspended] = useState(false);
   const [accessGateError, setAccessGateError] = useState<string | null>(null);
-  const [pendingAccessCode, setPendingAccessCode] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
-    const params = new URLSearchParams(window.location.search);
-    const fromUrl = params.get('access')?.trim().toUpperCase();
-    if (fromUrl) {
-      window.sessionStorage.setItem('cadence_pending_access', fromUrl);
-      params.delete('access');
-      const remaining = params.toString();
-      const nextUrl = remaining
-        ? `${window.location.pathname}?${remaining}`
-        : window.location.pathname;
-      window.history.replaceState({}, '', nextUrl);
-      return fromUrl;
-    }
-    return window.sessionStorage.getItem('cadence_pending_access') || null;
-  });
+  const [pendingAccessCode, setPendingAccessCode] = useState<string | null>(initialInvites.accessCode);
+  const [pendingBoardInvite, setPendingBoardInvite] = useState<{
+    boardId: string;
+    inviteId: string;
+  } | null>(initialInvites.boardInvite);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [workspacePage, setWorkspacePage] = useState<'workspace' | 'admin'>('workspace');
   const [asyncError, setAsyncError] = useState<Error | null>(null);
@@ -167,9 +227,11 @@ function WorkspaceApp() {
   const [allChatsOpen, setAllChatsOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [docsOpen, setDocsOpen] = useState(false);
+  const [addUsersOpen, setAddUsersOpen] = useState(false);
   const [joinModalState, setJoinModalState] = useState<{
     boardId?: string;
     inviteId?: string;
+    initialError?: string;
   } | null>(null);
   const [createTaskOpen, setCreateTaskOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -224,7 +286,11 @@ function WorkspaceApp() {
     };
   }, [filtersOpen]);
 
-  const verifyAndProvisionUser = async (nextUser: User, autoRedeemCode: string | null) => {
+  const verifyAndProvisionUser = async (
+    nextUser: User,
+    autoRedeemCode: string | null,
+    autoJoinInvite: { boardId: string; inviteId: string } | null
+  ) => {
     setAccessStatus('checking');
     setAccessSuspended(false);
     setAccessGateError(null);
@@ -236,7 +302,7 @@ function WorkspaceApp() {
     if (!wlStatus.allowed && !wlStatus.suspended && autoRedeemCode) {
       try {
         const redeemed = await redeemAccessCode(nextUser, autoRedeemCode);
-        window.sessionStorage.removeItem('cadence_pending_access');
+        window.sessionStorage.removeItem(PENDING_ACCESS_STORAGE_KEY);
         setPendingAccessCode(null);
         wlStatus = {
           allowed: true,
@@ -250,8 +316,30 @@ function WorkspaceApp() {
         );
       }
     } else if (wlStatus.allowed && autoRedeemCode) {
-      window.sessionStorage.removeItem('cadence_pending_access');
+      window.sessionStorage.removeItem(PENDING_ACCESS_STORAGE_KEY);
       setPendingAccessCode(null);
+    }
+
+    if (!wlStatus.allowed && !wlStatus.suspended && autoJoinInvite) {
+      try {
+        const onboarded = await tryWhitelistFromBoardInvite(
+          nextUser,
+          autoJoinInvite.boardId,
+          autoJoinInvite.inviteId
+        );
+        wlStatus = {
+          allowed: true,
+          suspended: false,
+          canCreateBoards: onboarded.canCreateBoards,
+          email: onboarded.email,
+        };
+      } catch (inviteErr) {
+        window.sessionStorage.removeItem(PENDING_JOIN_STORAGE_KEY);
+        setPendingBoardInvite(null);
+        setAccessGateError(
+          inviteErr instanceof Error ? inviteErr.message : 'Unable to join via board invite link.'
+        );
+      }
     }
 
     if (!wlStatus.allowed) {
@@ -266,25 +354,54 @@ function WorkspaceApp() {
 
     const effectiveCanCreateBoards = adminStatus.isAdmin || wlStatus.canCreateBoards;
     const ensured = await ensureUserAndStarterWorkspace(nextUser, effectiveCanCreateBoards);
-    setProfile(ensured);
+
+    // Automatically convert any pre-assigned email board grants into live memberships
+    const claimedBoardIds = await claimPendingBoardGrants(nextUser);
+
+    let targetBoardId = ensured.activeBoardId || '';
+
+    // Auto-redeem any pending ?join= board invite link directly into the board
+    if (autoJoinInvite) {
+      try {
+        const res = await redeemBoardInvite(
+          nextUser,
+          autoJoinInvite.boardId,
+          autoJoinInvite.inviteId
+        );
+        targetBoardId = res.boardId;
+        await updateUserActiveBoard(nextUser.uid, res.boardId).catch(() => {});
+      } catch (joinErr) {
+        setJoinModalState({
+          boardId: autoJoinInvite.boardId,
+          inviteId: autoJoinInvite.inviteId,
+          initialError:
+            joinErr instanceof Error ? joinErr.message : 'Unable to join shared board.',
+        });
+      } finally {
+        window.sessionStorage.removeItem(PENDING_JOIN_STORAGE_KEY);
+        setPendingBoardInvite(null);
+      }
+    }
+
+    if (!targetBoardId && claimedBoardIds.length > 0) {
+      targetBoardId = claimedBoardIds[0];
+    }
+
+    const effectiveProfile =
+      targetBoardId && ensured.activeBoardId !== targetBoardId
+        ? { ...ensured, activeBoardId: targetBoardId }
+        : ensured;
+
+    setProfile(effectiveProfile);
     setIsAdmin(adminStatus.isAdmin);
     setIsBootstrapAdmin(adminStatus.isBootstrapAdmin);
     setCanCreateBoards(effectiveCanCreateBoards);
     setAccessSuspended(false);
     setAccessGateError(null);
     setAccessStatus('granted');
-    if (ensured.theme) setTheme(ensured.theme);
-    if (ensured.activeBoardId) setActiveBoardId(ensured.activeBoardId);
+    if (effectiveProfile.theme) setTheme(effectiveProfile.theme);
+    if (targetBoardId) setActiveBoardId(targetBoardId);
     setWorkspaceReady(true);
-
-    // Check URL for ?join=boardId&code=inviteId
-    const params = new URLSearchParams(window.location.search);
-    const joinBoardId = params.get('join');
-    const joinCode = params.get('code');
-    if (joinBoardId && joinCode) {
-      setJoinModalState({ boardId: joinBoardId, inviteId: joinCode });
-      window.history.replaceState({}, '', window.location.pathname);
-    }
   };
 
   // Listen to Firebase Auth
@@ -316,8 +433,13 @@ function WorkspaceApp() {
       }
 
       try {
-        const storedCode = window.sessionStorage.getItem('cadence_pending_access');
-        await verifyAndProvisionUser(nextUser, storedCode || pendingAccessCode);
+        const storedCode = window.sessionStorage.getItem(PENDING_ACCESS_STORAGE_KEY);
+        const storedJoin = readStoredPendingJoin();
+        await verifyAndProvisionUser(
+          nextUser,
+          storedCode || pendingAccessCode,
+          storedJoin || pendingBoardInvite
+        );
       } catch (err) {
         setAsyncError(err instanceof Error ? err : new Error(String(err)));
       }
@@ -826,6 +948,7 @@ function WorkspaceApp() {
         <SignInView
           theme={theme}
           pendingAccessCode={pendingAccessCode}
+          pendingBoardInvite={pendingBoardInvite}
           onToggleTheme={handleToggleTheme}
           onOpenThemeSettings={() => setThemeSettingsOpen(true)}
         />
@@ -841,17 +964,18 @@ function WorkspaceApp() {
           user={user}
           suspended={accessSuspended}
           initialAccessCode={pendingAccessCode}
+          pendingBoardInvite={pendingBoardInvite}
           initialError={accessGateError}
           theme={theme}
           onToggleTheme={handleToggleTheme}
           onOpenThemeSettings={() => setThemeSettingsOpen(true)}
           onAccessGranted={async () => {
-            window.sessionStorage.removeItem('cadence_pending_access');
+            window.sessionStorage.removeItem(PENDING_ACCESS_STORAGE_KEY);
             setPendingAccessCode(null);
-            await verifyAndProvisionUser(user, null);
+            await verifyAndProvisionUser(user, null, readStoredPendingJoin() || pendingBoardInvite);
           }}
           onRecheckAccess={async () => {
-            await verifyAndProvisionUser(user, null);
+            await verifyAndProvisionUser(user, null, readStoredPendingJoin() || pendingBoardInvite);
           }}
           onSignOut={handleSignOut}
         />
@@ -926,6 +1050,7 @@ function WorkspaceApp() {
         onReorderBoards={handleReorderBoards}
         onOpenNewBoard={() => setBoardModalState({ mode: 'create' })}
         onOpenJoinBoard={() => setJoinModalState({})}
+        onOpenAddUsers={() => setAddUsersOpen(true)}
         onOpenAdminPanel={() => setWorkspacePage('admin')}
         onOpenDocs={() => setDocsOpen(true)}
         onOpenThemeSettings={() => setThemeSettingsOpen(true)}
@@ -1498,8 +1623,16 @@ function WorkspaceApp() {
           user={user}
           initialBoardId={joinModalState.boardId}
           initialInviteId={joinModalState.inviteId}
+          initialError={joinModalState.initialError}
           onJoined={handleSelectBoard}
           onClose={() => setJoinModalState(null)}
+        />
+      )}
+
+      {addUsersOpen && (isAdmin || canCreateBoards) && (
+        <AddUsersModal
+          uid={user.uid}
+          onClose={() => setAddUsersOpen(false)}
         />
       )}
 

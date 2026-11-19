@@ -266,6 +266,8 @@ export interface WhitelistEntry {
   canCreateBoards?: boolean;
   addedBy: string;
   inviteCode?: string;
+  boardInviteBoardId?: string;
+  boardInviteId?: string;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }
@@ -344,6 +346,7 @@ export interface BoardMember {
 export interface BoardInvite {
   id: string;
   boardId: string;
+  boardTitle?: string;
   ownerId: string;
   createdBy: string;
   label: string;
@@ -354,6 +357,35 @@ export interface BoardInvite {
   canDeleteTasks: boolean;
   canManageColumns: boolean;
   active: boolean;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface PendingBoardGrant {
+  boardId: string;
+  email: string;
+  emailHash: string;
+  boardTitle: string;
+  ownerId: string;
+  createdBy: string;
+  role: BoardRole;
+  customRoleName?: string;
+  canCreateTasks: boolean;
+  canEditTasks: boolean;
+  canDeleteTasks: boolean;
+  canManageColumns: boolean;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface PendingBoardMemberNotice {
+  emailHash: string;
+  boardId: string;
+  ownerId: string;
+  createdBy: string;
+  maskedEmail: string;
+  role: BoardRole;
+  customRoleName?: string;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }

@@ -75,6 +75,18 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]*$"
         },
+        "boardInviteBoardId": {
+          "type": "string",
+          "description": "Optional board ID used to self-whitelist via an active board invite link.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]*$"
+        },
+        "boardInviteId": {
+          "type": "string",
+          "description": "Optional invite ID used to self-whitelist via an active board invite link.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]*$"
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -487,6 +499,12 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
+        "boardTitle": {
+          "type": "string",
+          "description": "Optional cached display title of the parent board for invite previews.",
+          "minLength": 1,
+          "maxLength": 80
+        },
         "ownerId": {
           "type": "string",
           "description": "UID of the parent board creator.",
@@ -562,6 +580,132 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "PendingBoardGrant": {
+      "title": "PendingBoardGrant",
+      "description": "Pre-assigned board membership stored under a whitelisted user's email until their first sign-in.",
+      "type": "object",
+      "properties": {
+        "boardId": {
+          "type": "string",
+          "description": "Target board ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "description": "Normalized lowercase email of the recipient.",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "emailHash": {
+          "type": "string",
+          "description": "64-character SHA-256 hex digest matching boards/{boardId}/pendingMembers/{emailHash}.",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "boardTitle": {
+          "type": "string",
+          "description": "Target board title.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the board creator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "UID of the admin or board creator who assigned this grant.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "role": {
+          "type": "string",
+          "description": "Assigned role key.",
+          "enum": ["viewer", "contributor", "editor", "manager", "custom"]
+        },
+        "customRoleName": {
+          "type": "string",
+          "description": "Optional custom role name.",
+          "maxLength": 40
+        },
+        "canCreateTasks": { "type": "boolean" },
+        "canEditTasks": { "type": "boolean" },
+        "canDeleteTasks": { "type": "boolean" },
+        "canManageColumns": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "boardId",
+        "email",
+        "emailHash",
+        "boardTitle",
+        "ownerId",
+        "createdBy",
+        "role",
+        "canCreateTasks",
+        "canEditTasks",
+        "canDeleteTasks",
+        "canManageColumns",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PendingBoardMemberNotice": {
+      "title": "PendingBoardMemberNotice",
+      "description": "Non-PII board-scoped notice showing a masked email pending first sign-in.",
+      "type": "object",
+      "properties": {
+        "emailHash": {
+          "type": "string",
+          "description": "SHA-256 hex digest of lowercase email.",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "boardId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "maskedEmail": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 80
+        },
+        "role": {
+          "type": "string",
+          "enum": ["viewer", "contributor", "editor", "manager", "custom"]
+        },
+        "customRoleName": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["emailHash", "boardId", "ownerId", "createdBy", "maskedEmail", "role", "createdAt", "updatedAt"]
     },
     "Column": {
       "title": "Column",
@@ -903,6 +1047,10 @@
       "schema": { "$ref": "#/entities/WhitelistEntry" },
       "description": "Admin-managed email access allowlist enforced on workspace initialization and writes."
     },
+    "/whitelist/{emailKey}/pendingBoards/{boardId}": {
+      "schema": { "$ref": "#/entities/PendingBoardGrant" },
+      "description": "Pending board access grants claimed automatically when the recipient signs in."
+    },
     "/accessCodes/{codeId}": {
       "schema": { "$ref": "#/entities/AccessCode" },
       "description": "Admin-generated workspace join codes redeemable to auto-add verified emails to /whitelist."
@@ -930,6 +1078,10 @@
     "/boards/{boardId}/members/{memberId}": {
       "schema": { "$ref": "#/entities/BoardMember" },
       "description": "Board collaborators and their granular utility permissions."
+    },
+    "/boards/{boardId}/pendingMembers/{emailHash}": {
+      "schema": { "$ref": "#/entities/PendingBoardMemberNotice" },
+      "description": "Non-PII pending collaborator notices displayed in Share & Permissions until first sign-in."
     },
     "/boards/{boardId}/invites/{inviteId}": {
       "schema": { "$ref": "#/entities/BoardInvite" },

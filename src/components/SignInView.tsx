@@ -8,6 +8,7 @@ import { DocsModal } from './DocsModal';
 interface SignInViewProps {
   theme: ThemeMode;
   pendingAccessCode?: string | null;
+  pendingBoardInvite?: { boardId: string; inviteId: string } | null;
   onToggleTheme: () => void;
   onOpenThemeSettings: () => void;
 }
@@ -15,6 +16,7 @@ interface SignInViewProps {
 export function SignInView({
   theme,
   pendingAccessCode = null,
+  pendingBoardInvite = null,
   onToggleTheme,
   onOpenThemeSettings,
 }: SignInViewProps) {
@@ -106,10 +108,16 @@ export function SignInView({
               </p>
             </div>
 
-            {pendingAccessCode && (
+            {pendingBoardInvite ? (
               <div className="text-xs text-blue-800 dark:text-blue-200 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-2.5">
-                Workspace invite detected. Sign in with Google to activate your workspace access.
+                Board invite detected. Continue with Google to join the Board automatically.
               </div>
+            ) : (
+              pendingAccessCode && (
+                <div className="text-xs text-blue-800 dark:text-blue-200 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-2.5">
+                  Workspace invite detected. Sign in with Google to activate your workspace access.
+                </div>
+              )
             )}
 
             {authError && (

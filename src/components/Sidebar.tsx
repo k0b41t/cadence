@@ -15,6 +15,7 @@ import {
   Plus,
   ShieldCheck,
   Sun,
+  UserPlus,
   Users,
   X,
 } from 'lucide-react';
@@ -38,6 +39,7 @@ interface SidebarProps {
   onReorderBoards: (nextBoardOrder: string[]) => void;
   onOpenNewBoard: () => void;
   onOpenJoinBoard: () => void;
+  onOpenAddUsers: () => void;
   onOpenAdminPanel: () => void;
   onOpenDocs: () => void;
   onOpenThemeSettings: () => void;
@@ -77,6 +79,7 @@ export function Sidebar({
   onReorderBoards,
   onOpenNewBoard,
   onOpenJoinBoard,
+  onOpenAddUsers,
   onOpenAdminPanel,
   onOpenDocs,
   onOpenThemeSettings,
@@ -432,7 +435,7 @@ export function Sidebar({
 
       {/* Workspace Utilities, Admin Controls & User Footer */}
       <div className="p-3 border-t border-slate-200 dark:border-slate-800 space-y-2 shrink-0">
-        {isAdmin && (
+        {isAdmin ? (
           <button
             type="button"
             onClick={() => {
@@ -451,6 +454,23 @@ export function Sidebar({
             </span>
             <span className="text-[11px]">{isAdminPageActive ? 'Active' : 'Manage'}</span>
           </button>
+        ) : (
+          canCreateBoards && (
+            <button
+              type="button"
+              onClick={() => {
+                onOpenAddUsers();
+                onCloseMobile();
+              }}
+              className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-950/70"
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Add Users</span>
+              </span>
+              <span className="text-[11px]">Workspace</span>
+            </button>
+          )
         )}
 
         <div className="grid grid-cols-3 gap-1.5">

@@ -151,6 +151,22 @@ service cloud.firestore {
         && data.canManageColumns == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canManageColumns;
     }
 
+    function pendingBoardMatchesMember(boardId, emailKey, data) {
+      return isValidEmailKey(emailKey)
+        && exists(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId))
+        && exists(/databases/$(database)/documents/boards/$(boardId)/pendingMembers/$(get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.emailHash))
+        && data.ownerId == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.ownerId
+        && data.role == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.role
+        && (
+          (!('customRoleName' in data) && !('customRoleName' in get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data)) ||
+          ('customRoleName' in data && 'customRoleName' in get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data && data.customRoleName == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.customRoleName)
+        )
+        && data.canCreateTasks == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canCreateTasks
+        && data.canEditTasks == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canEditTasks
+        && data.canDeleteTasks == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canDeleteTasks
+        && data.canManageColumns == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canManageColumns;
+    }
+
     // -------------------------------------------------------------------------
     // Entity Validation Blueprints
     // -------------------------------------------------------------------------
@@ -169,6 +185,38 @@ service cloud.firestore {
         && (!('canCreateBoards' in data) || data.canCreateBoards is bool)
         && data.addedBy is string && isValidId(data.addedBy)
         && (!('inviteCode' in data) || isValidOptionalId(data.inviteCode))
+        && (!('boardInviteBoardId' in data) || isValidOptionalId(data.boardInviteBoardId))
+        && (!('boardInviteId' in data) || isValidOptionalId(data.boardInviteId))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPendingBoardGrant(data, emailKey, boardId) {
+      return data.boardId is string && data.boardId == boardId && isValidId(data.boardId)
+        && data.email is string && data.email == emailKey && isValidEmailKey(data.email)
+        && data.emailHash is string && data.emailHash.size() == 64 && data.emailHash.matches('^[a-f0-9]{64}$')
+        && data.boardTitle is string && data.boardTitle.size() >= 1 && data.boardTitle.size() <= 80
+        && data.ownerId is string && isValidId(data.ownerId)
+        && data.createdBy is string && isValidId(data.createdBy)
+        && data.role in ['viewer', 'contributor', 'editor', 'manager', 'custom']
+        && (!('customRoleName' in data) || (data.customRoleName is string && data.customRoleName.size() <= 40))
+        && data.canCreateTasks is bool
+        && data.canEditTasks is bool
+        && data.canDeleteTasks is bool
+        && data.canManageColumns is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPendingMemberNotice(data, boardId, emailHash) {
+      return data.emailHash is string && data.emailHash == emailHash
+        && data.emailHash.size() == 64 && data.emailHash.matches('^[a-f0-9]{64}$')
+        && data.boardId is string && data.boardId == boardId && isValidId(data.boardId)
+        && data.ownerId is string && isValidId(data.ownerId)
+        && data.createdBy is string && isValidId(data.createdBy)
+        && data.maskedEmail is string && data.maskedEmail.size() >= 3 && data.maskedEmail.size() <= 80
+        && data.role in ['viewer', 'contributor', 'editor', 'manager', 'custom']
+        && (!('customRoleName' in data) || (data.customRoleName is string && data.customRoleName.size() <= 40))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -285,6 +333,7 @@ service cloud.firestore {
     function isValidBoardInvite(data, boardId, inviteId) {
       return data.id is string && data.id == inviteId && isValidId(data.id)
         && data.boardId is string && data.boardId == boardId && isValidId(data.boardId)
+        && (!('boardTitle' in data) || (data.boardTitle is string && data.boardTitle.size() >= 1 && data.boardTitle.size() <= 80))
         && data.ownerId is string && isValidId(data.ownerId)
         && data.createdBy is string && isValidId(data.createdBy)
         && data.label is string && data.label.size() <= 60
@@ -480,6 +529,7 @@ service cloud.firestore {
     match /whitelist/{emailKey} {
       allow get: if isSignedIn() && isValidEmailKey(emailKey) && (
         isAdmin() ||
+        canUserCreateBoards() ||
         (isVerifiedUser() && request.auth.token.email is string && request.auth.token.email.lower() == emailKey)
       );
       allow list: if isSignedIn() && isAdmin();
@@ -492,7 +542,14 @@ service cloud.firestore {
           (
             isAdmin()
             && incoming().keys().hasAll(['email', 'label', 'active', 'addedBy', 'createdAt', 'updatedAt'])
-            && incoming().keys().hasOnly(['email', 'label', 'active', 'canCreateBoards', 'addedBy', 'inviteCode', 'createdAt', 'updatedAt'])
+            && incoming().keys().hasOnly(['email', 'label', 'active', 'canCreateBoards', 'addedBy', 'inviteCode', 'boardInviteBoardId', 'boardInviteId', 'createdAt', 'updatedAt'])
+            && incoming().addedBy == request.auth.uid
+          ) || (
+            canUserCreateBoards()
+            && incoming().keys().hasAll(['email', 'label', 'active', 'canCreateBoards', 'addedBy', 'createdAt', 'updatedAt'])
+            && incoming().keys().hasOnly(['email', 'label', 'active', 'canCreateBoards', 'addedBy', 'createdAt', 'updatedAt'])
+            && incoming().active == true
+            && incoming().canCreateBoards == false
             && incoming().addedBy == request.auth.uid
           ) || (
             isVerifiedUser()
@@ -508,6 +565,21 @@ service cloud.firestore {
             && get(/databases/$(database)/documents/accessCodes/$(incoming().inviteCode)).data.active == true
             && incoming().label == get(/databases/$(database)/documents/accessCodes/$(incoming().inviteCode)).data.label
             && incoming().canCreateBoards == (('canCreateBoards' in get(/databases/$(database)/documents/accessCodes/$(incoming().inviteCode)).data) && get(/databases/$(database)/documents/accessCodes/$(incoming().inviteCode)).data.canCreateBoards == true)
+          ) || (
+            isVerifiedUser()
+            && request.auth.token.email is string
+            && request.auth.token.email.lower() == emailKey
+            && incoming().keys().hasAll(['email', 'label', 'active', 'canCreateBoards', 'addedBy', 'boardInviteBoardId', 'boardInviteId', 'createdAt', 'updatedAt'])
+            && incoming().keys().hasOnly(['email', 'label', 'active', 'canCreateBoards', 'addedBy', 'boardInviteBoardId', 'boardInviteId', 'createdAt', 'updatedAt'])
+            && incoming().active == true
+            && incoming().canCreateBoards == false
+            && incoming().addedBy == request.auth.uid
+            && isValidId(incoming().boardInviteBoardId)
+            && isValidId(incoming().boardInviteId)
+            && exists(/databases/$(database)/documents/boards/$(incoming().boardInviteBoardId)/invites/$(incoming().boardInviteId))
+            && get(/databases/$(database)/documents/boards/$(incoming().boardInviteBoardId)/invites/$(incoming().boardInviteId)).data.active == true
+            && exists(/databases/$(database)/documents/boards/$(incoming().boardInviteBoardId))
+            && get(/databases/$(database)/documents/boards/$(incoming().boardInviteBoardId)).data.status == 'active'
           )
         );
 
@@ -525,6 +597,53 @@ service cloud.firestore {
         );
 
       allow delete: if isAdmin() && isValidEmailKey(emailKey);
+
+      match /pendingBoards/{boardId} {
+        allow get: if isSignedIn() && isValidEmailKey(emailKey) && isValidId(boardId) && (
+          isAdmin() ||
+          isBoardOwner(boardId) ||
+          (isVerifiedUser() && request.auth.token.email is string && request.auth.token.email.lower() == emailKey)
+        );
+        allow list: if isSignedIn() && isValidEmailKey(emailKey) && (
+          isAdmin() ||
+          (isVerifiedUser() && request.auth.token.email is string && request.auth.token.email.lower() == emailKey)
+        );
+
+        allow create: if isAllowedWorkspaceUser()
+          && isValidEmailKey(emailKey)
+          && isValidId(boardId)
+          && incoming().keys().hasAll(['boardId', 'email', 'emailHash', 'boardTitle', 'ownerId', 'createdBy', 'role', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['boardId', 'email', 'emailHash', 'boardTitle', 'ownerId', 'createdBy', 'role', 'customRoleName', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'createdAt', 'updatedAt'])
+          && isValidPendingBoardGrant(incoming(), emailKey, boardId)
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && boardExists(boardId)
+          && incoming().ownerId == getBoard(boardId).data.ownerId
+          && (isAdmin() || (isBoardOwner(boardId) && isBoardActive(boardId)));
+
+        allow update: if isAllowedWorkspaceUser()
+          && isValidEmailKey(emailKey)
+          && isValidId(boardId)
+          && isValidPendingBoardGrant(incoming(), emailKey, boardId)
+          && incoming().boardId == existing().boardId
+          && incoming().email == existing().email
+          && incoming().emailHash == existing().emailHash
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (isAdmin() || (isBoardOwner(boardId) && isBoardActive(boardId)))
+          && incoming().diff(existing()).affectedKeys().hasOnly(['boardTitle', 'role', 'customRoleName', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'updatedAt']);
+
+        allow delete: if isSignedIn()
+          && isValidEmailKey(emailKey)
+          && isValidId(boardId)
+          && (
+            isAdmin() ||
+            isBoardOwner(boardId) ||
+            (isVerifiedUser() && request.auth.token.email is string && request.auth.token.email.lower() == emailKey)
+          );
+      }
     }
 
     // -------------------------------------------------------------------------
@@ -735,6 +854,13 @@ service cloud.firestore {
               && isOwner(memberId)
               && 'inviteId' in incoming()
               && inviteMatchesMember(boardId, incoming().inviteId, incoming())
+            ) ||
+            (
+              isBoardActive(boardId)
+              && isOwner(memberId)
+              && isVerifiedUser()
+              && request.auth.token.email is string
+              && pendingBoardMatchesMember(boardId, request.auth.token.email.lower(), incoming())
             )
           );
 
@@ -766,6 +892,49 @@ service cloud.firestore {
       }
 
       // -----------------------------------------------------------------------
+      // Pending Board Member Notices (No Plaintext PII)
+      // -----------------------------------------------------------------------
+      match /pendingMembers/{emailHash} {
+        allow get: if isSignedIn() && isValidId(boardId)
+          && emailHash.size() == 64 && emailHash.matches('^[a-f0-9]{64}$')
+          && (isAdmin() || isBoardOwner(boardId));
+        allow list: if isSignedIn() && (
+          isBootstrapAdmin() ||
+          resource.data.ownerId == request.auth.uid
+        );
+
+        allow create: if isAllowedWorkspaceUser()
+          && isValidId(boardId)
+          && emailHash.size() == 64 && emailHash.matches('^[a-f0-9]{64}$')
+          && incoming().keys().hasAll(['emailHash', 'boardId', 'ownerId', 'createdBy', 'maskedEmail', 'role', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['emailHash', 'boardId', 'ownerId', 'createdBy', 'maskedEmail', 'role', 'customRoleName', 'createdAt', 'updatedAt'])
+          && isValidPendingMemberNotice(incoming(), boardId, emailHash)
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && boardExists(boardId)
+          && incoming().ownerId == getBoard(boardId).data.ownerId
+          && (isAdmin() || (isBoardOwner(boardId) && isBoardActive(boardId)));
+
+        allow update: if isAllowedWorkspaceUser()
+          && isValidId(boardId)
+          && emailHash.size() == 64 && emailHash.matches('^[a-f0-9]{64}$')
+          && isValidPendingMemberNotice(incoming(), boardId, emailHash)
+          && incoming().emailHash == existing().emailHash
+          && incoming().boardId == existing().boardId
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (isAdmin() || (isBoardOwner(boardId) && isBoardActive(boardId)))
+          && incoming().diff(existing()).affectedKeys().hasOnly(['maskedEmail', 'role', 'customRoleName', 'updatedAt']);
+
+        allow delete: if isAllowedWorkspaceUser()
+          && isValidId(boardId)
+          && emailHash.size() == 64 && emailHash.matches('^[a-f0-9]{64}$')
+          && (isAdmin() || isBoardOwner(boardId) || isBoardMember(boardId));
+      }
+
+      // -----------------------------------------------------------------------
       // Board Invites Subcollection
       // -----------------------------------------------------------------------
       match /invites/{inviteId} {
@@ -776,7 +945,7 @@ service cloud.firestore {
           && isValidId(boardId)
           && isValidId(inviteId)
           && incoming().keys().hasAll(['id', 'boardId', 'ownerId', 'createdBy', 'label', 'role', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'active', 'createdAt', 'updatedAt'])
-          && incoming().keys().hasOnly(['id', 'boardId', 'ownerId', 'createdBy', 'label', 'role', 'customRoleName', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'active', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'boardId', 'boardTitle', 'ownerId', 'createdBy', 'label', 'role', 'customRoleName', 'canCreateTasks', 'canEditTasks', 'canDeleteTasks', 'canManageColumns', 'active', 'createdAt', 'updatedAt'])
           && isValidBoardInvite(incoming(), boardId, inviteId)
           && incoming().createdBy == request.auth.uid
           && incoming().createdAt == request.time

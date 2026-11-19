@@ -35,6 +35,8 @@ import {
   type Column,
   type ColumnBgColor,
   type ColumnColorRule,
+  type PendingBoardGrant,
+  type PendingBoardMemberNotice,
   type Priority,
   type Subtask,
   type Task,
@@ -1376,6 +1378,18 @@ export async function deleteBoard(boardId: string): Promise<void> {
     handleFirestoreError(error, OperationType.DELETE, `boards/${boardId}/messages`);
   }
 
+  // Delete all pending member notices
+  try {
+    const pendingSnaps = await getDocs(collection(db, 'boards', boardId, 'pendingMembers'));
+    if (!pendingSnaps.empty) {
+      const pendBatch = writeBatch(db);
+      pendingSnaps.docs.forEach((p) => pendBatch.delete(p.ref));
+      await pendBatch.commit();
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `boards/${boardId}/pendingMembers`);
+  }
+
   // Delete all members and their boardRefs
   try {
     const memberSnaps = await getDocs(collection(db, 'boards', boardId, 'members'));
@@ -1865,41 +1879,305 @@ export async function deleteTaskMessage(boardId: string, messageId: string): Pro
 // -----------------------------------------------------------------------------
 // Sharing, Granular Permissions, Invites & Admin Management
 // -----------------------------------------------------------------------------
+export function maskEmailForNotice(emailKey: string): string {
+  const [localPart = '', domainPart = ''] = emailKey.split('@');
+  const visible = localPart.slice(0, Math.min(2, localPart.length));
+  const masked = `${visible}***@${domainPart}`;
+  return masked.slice(0, LIMITS.WHITELIST_LABEL_MAX);
+}
+
+export function subscribeBoardPendingMembers(
+  boardId: string,
+  onData: (notices: PendingBoardMemberNotice[]) => void
+): Unsubscribe {
+  const path = `boards/${boardId}/pendingMembers`;
+  return onSnapshot(
+    collection(db, 'boards', boardId, 'pendingMembers'),
+    (snapshot) => {
+      const items = snapshot.docs.map((d) => d.data() as PendingBoardMemberNotice);
+      items.sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+      onData(items);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    }
+  );
+}
+
+export async function revokePendingBoardInvite(
+  boardId: string,
+  emailHash: string
+): Promise<void> {
+  assertValidId(boardId, 'boardId');
+  if (!/^[a-f0-9]{64}$/.test(emailHash)) {
+    throw new Error('Invalid pending invite identifier.');
+  }
+  const path = `boards/${boardId}/pendingMembers/${emailHash}`;
+  try {
+    await deleteDoc(doc(db, 'boards', boardId, 'pendingMembers', emailHash));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
 export async function grantBoardAccessByEmail(
+  actorUid: string,
   board: Board,
   email: string,
   role: BoardRole,
   permissions: BoardPermissions,
   customRoleName?: string
-): Promise<{ uid: string; displayName: string }> {
-  const emailHash = await hashEmail(email);
+): Promise<{ uid?: string; displayName: string; pending: boolean }> {
+  assertValidId(actorUid, 'userId');
+  assertValidId(board.id, 'boardId');
+
+  const emailKey = normalizeEmailKey(email);
+  const emailHash = await hashEmail(emailKey);
   const lookupPath = `emailLookup/${emailHash}`;
   let targetUid = '';
   let displayName = '';
+  let hasLookup = false;
 
   try {
     const snap = await getDoc(doc(db, 'emailLookup', emailHash));
-    if (!snap.exists()) {
-      throw new Error(
-        'No signed-in user found for that email yet. Generate an invite link below so they can join upon signing in.'
-      );
+    if (snap.exists()) {
+      const data = snap.data();
+      targetUid = data.uid as string;
+      displayName = data.displayName as string;
+      hasLookup = true;
     }
-    const data = snap.data();
-    targetUid = data.uid as string;
-    displayName = data.displayName as string;
   } catch (error) {
-    if (error instanceof Error && error.message.includes('No signed-in user')) {
-      throw error;
-    }
     handleFirestoreError(error, OperationType.GET, lookupPath);
   }
 
-  if (targetUid === board.ownerId) {
-    throw new Error('This user is already the creator of this board.');
+  if (hasLookup) {
+    if (targetUid === board.ownerId) {
+      throw new Error('This user is already the creator of this board.');
+    }
+    await grantBoardAccessByUid(board, targetUid, displayName, role, permissions, customRoleName);
+    return { uid: targetUid, displayName, pending: false };
   }
 
-  await grantBoardAccessByUid(board, targetUid, displayName, role, permissions, customRoleName);
-  return { uid: targetUid, displayName };
+  // User has not signed in yet: auto-whitelist (strictly without Board creation permissions)
+  // and queue a pending board grant claimed automatically on their first sign-in.
+  const whitelistRef = doc(db, 'whitelist', emailKey);
+  let whitelistStatusKnown = false;
+  try {
+    const wlSnap = await getDoc(whitelistRef);
+    whitelistStatusKnown = true;
+    if (wlSnap.exists()) {
+      const entry = wlSnap.data() as WhitelistEntry;
+      if (entry.active === false) {
+        throw new Error(
+          "This email's workspace access is currently paused by an administrator. Ask an admin to re-enable it before sharing."
+        );
+      }
+    } else {
+      await setDoc(whitelistRef, {
+        email: emailKey,
+        label: '',
+        active: true,
+        canCreateBoards: false,
+        addedBy: actorUid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('currently paused')) {
+      throw error;
+    }
+    const msg = error instanceof Error ? error.message.toLowerCase() : '';
+    if (msg.includes('permission') || msg.includes('insufficient')) {
+      if (!whitelistStatusKnown) {
+        throw new Error(
+          'This email has not signed in yet and you do not have permission to add new workspace users. Ask an Admin to whitelist them or share an Invite Link instead.'
+        );
+      }
+      throw new Error(
+        'Only Admins or users with Board Creation permissions can auto-add new emails to the workspace. Share an Invite Link instead.'
+      );
+    }
+    handleFirestoreError(error, OperationType.WRITE, `whitelist/${emailKey}`);
+  }
+
+  const cleanBoardTitle = sanitizeText(board.title, LIMITS.BOARD_TITLE_MAX) || 'Shared Board';
+  const cleanRoleName =
+    role === 'custom' && customRoleName
+      ? sanitizeText(customRoleName, LIMITS.CUSTOM_ROLE_NAME_MAX)
+      : '';
+
+  const pendingBoardRef = doc(db, 'whitelist', emailKey, 'pendingBoards', board.id);
+  const pendingBoardPath = `whitelist/${emailKey}/pendingBoards/${board.id}`;
+  try {
+    const existingGrant = await getDoc(pendingBoardRef);
+    if (existingGrant.exists()) {
+      await updateDoc(pendingBoardRef, {
+        boardTitle: cleanBoardTitle,
+        role,
+        customRoleName: cleanRoleName,
+        canCreateTasks: permissions.canCreateTasks,
+        canEditTasks: permissions.canEditTasks,
+        canDeleteTasks: permissions.canDeleteTasks,
+        canManageColumns: permissions.canManageColumns,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(pendingBoardRef, {
+        boardId: board.id,
+        email: emailKey,
+        emailHash,
+        boardTitle: cleanBoardTitle,
+        ownerId: board.ownerId,
+        createdBy: actorUid,
+        role,
+        customRoleName: cleanRoleName,
+        canCreateTasks: permissions.canCreateTasks,
+        canEditTasks: permissions.canEditTasks,
+        canDeleteTasks: permissions.canDeleteTasks,
+        canManageColumns: permissions.canManageColumns,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, pendingBoardPath);
+  }
+
+  const noticeRef = doc(db, 'boards', board.id, 'pendingMembers', emailHash);
+  const noticePath = `boards/${board.id}/pendingMembers/${emailHash}`;
+  const maskedEmail = maskEmailForNotice(emailKey);
+  try {
+    const existingNotice = await getDoc(noticeRef);
+    if (existingNotice.exists()) {
+      await updateDoc(noticeRef, {
+        maskedEmail,
+        role,
+        customRoleName: cleanRoleName,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(noticeRef, {
+        emailHash,
+        boardId: board.id,
+        ownerId: board.ownerId,
+        createdBy: actorUid,
+        maskedEmail,
+        role,
+        customRoleName: cleanRoleName,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, noticePath);
+  }
+
+  return { displayName: emailKey, pending: true };
+}
+
+export async function claimPendingBoardGrants(user: User): Promise<string[]> {
+  if (!user.email || !user.emailVerified) return [];
+  assertValidId(user.uid, 'userId');
+
+  const emailKey = user.email.trim().toLowerCase();
+  if (!EMAIL_KEY_REGEX.test(emailKey)) return [];
+  const emailHash = await hashEmail(emailKey);
+
+  let snap;
+  try {
+    snap = await getDocs(collection(db, 'whitelist', emailKey, 'pendingBoards'));
+  } catch {
+    return [];
+  }
+
+  if (snap.empty) return [];
+
+  const cleanName =
+    sanitizeText(
+      user.displayName || user.email.split('@')[0] || 'Collaborator',
+      LIMITS.USER_DISPLAY_NAME_MAX
+    ) || 'Collaborator';
+
+  const claimedBoardIds: string[] = [];
+
+  for (const grantDoc of snap.docs) {
+    const grant = grantDoc.data() as PendingBoardGrant;
+    if (!grant.boardId || !ID_REGEX.test(grant.boardId)) {
+      await deleteDoc(grantDoc.ref).catch(() => {});
+      continue;
+    }
+
+    if (grant.ownerId === user.uid) {
+      await deleteDoc(grantDoc.ref).catch(() => {});
+      await deleteDoc(doc(db, 'boards', grant.boardId, 'pendingMembers', emailHash)).catch(() => {});
+      continue;
+    }
+
+    // Check if already a member
+    let alreadyMember = false;
+    try {
+      const memSnap = await getDoc(doc(db, 'boards', grant.boardId, 'members', user.uid));
+      if (memSnap.exists()) {
+        alreadyMember = true;
+      }
+    } catch {
+      // expected when not a member yet
+    }
+
+    if (alreadyMember) {
+      await deleteDoc(grantDoc.ref).catch(() => {});
+      await deleteDoc(doc(db, 'boards', grant.boardId, 'pendingMembers', emailHash)).catch(() => {});
+      claimedBoardIds.push(grant.boardId);
+      continue;
+    }
+
+    const memberPayload: Record<string, unknown> = {
+      uid: user.uid,
+      boardId: grant.boardId,
+      ownerId: grant.ownerId,
+      displayName: cleanName,
+      role: grant.role,
+      canView: true,
+      canCreateTasks: Boolean(grant.canCreateTasks),
+      canEditTasks: Boolean(grant.canEditTasks),
+      canDeleteTasks: Boolean(grant.canDeleteTasks),
+      canManageColumns: Boolean(grant.canManageColumns),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    const refPayload: Record<string, unknown> = {
+      boardId: grant.boardId,
+      userId: user.uid,
+      boardTitle: sanitizeText(grant.boardTitle || 'Shared Board', LIMITS.BOARD_TITLE_MAX) || 'Shared Board',
+      boardOwnerId: grant.ownerId,
+      role: grant.role,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    if (typeof grant.customRoleName === 'string') {
+      memberPayload.customRoleName = grant.customRoleName;
+      refPayload.customRoleName = grant.customRoleName;
+    }
+
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'boards', grant.boardId, 'members', user.uid), memberPayload);
+    batch.set(doc(db, 'users', user.uid, 'boardRefs', grant.boardId), refPayload);
+    batch.delete(grantDoc.ref);
+
+    try {
+      await batch.commit();
+      await deleteDoc(doc(db, 'boards', grant.boardId, 'pendingMembers', emailHash)).catch(() => {});
+      claimedBoardIds.push(grant.boardId);
+    } catch {
+      // Grant may have been revoked (pendingMembers deleted) or board archived/deleted; clean up stale doc
+      await deleteDoc(grantDoc.ref).catch(() => {});
+    }
+  }
+
+  return claimedBoardIds;
 }
 
 export async function grantBoardAccessByUid(
@@ -2028,11 +2306,13 @@ export async function createBoardInvite(
     role === 'custom' && customRoleName
       ? sanitizeText(customRoleName, LIMITS.CUSTOM_ROLE_NAME_MAX)
       : '';
+  const cleanBoardTitle = sanitizeText(board.title, LIMITS.BOARD_TITLE_MAX) || 'Shared Board';
   const path = `boards/${board.id}/invites/${inviteId}`;
   try {
     await setDoc(doc(db, 'boards', board.id, 'invites', inviteId), {
       id: inviteId,
       boardId: board.id,
+      boardTitle: cleanBoardTitle,
       ownerId: board.ownerId,
       createdBy: actorUid,
       label: sanitizeText(label, LIMITS.INVITE_LABEL_MAX),
@@ -2066,6 +2346,131 @@ export async function revokeBoardInvite(boardId: string, inviteId: string): Prom
   }
 }
 
+export interface BoardInvitePreview {
+  boardId: string;
+  inviteId: string;
+  boardTitle: string;
+  label: string;
+  role: BoardRole;
+  customRoleName?: string;
+  active: boolean;
+  canCreateTasks: boolean;
+  canEditTasks: boolean;
+  canDeleteTasks: boolean;
+  canManageColumns: boolean;
+}
+
+export async function getBoardInvitePreview(
+  boardId: string,
+  inviteId: string
+): Promise<BoardInvitePreview | null> {
+  assertValidId(boardId, 'boardId');
+  assertValidId(inviteId, 'inviteId');
+
+  const path = `boards/${boardId}/invites/${inviteId}`;
+  try {
+    const snap = await getDoc(doc(db, 'boards', boardId, 'invites', inviteId));
+    if (!snap.exists()) return null;
+    const inv = snap.data() as BoardInvite;
+    const boardTitle =
+      inv.boardTitle ||
+      (inv.label ? `Shared Board (${inv.label})` : 'Shared Board');
+    return {
+      boardId,
+      inviteId,
+      boardTitle,
+      label: inv.label || '',
+      role: inv.role,
+      customRoleName: inv.customRoleName,
+      active: inv.active,
+      canCreateTasks: inv.canCreateTasks,
+      canEditTasks: inv.canEditTasks,
+      canDeleteTasks: inv.canDeleteTasks,
+      canManageColumns: inv.canManageColumns,
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+}
+
+export async function tryWhitelistFromBoardInvite(
+  user: User,
+  boardId: string,
+  inviteId: string
+): Promise<{ email: string; canCreateBoards: boolean }> {
+  assertValidId(user.uid, 'userId');
+  assertValidId(boardId, 'boardId');
+  assertValidId(inviteId, 'inviteId');
+
+  if (!user.email || !user.emailVerified) {
+    throw new Error('A verified Google email address is required to join via invite link.');
+  }
+
+  const emailKey = normalizeEmailKey(user.email);
+  const whitelistPath = `whitelist/${emailKey}`;
+
+  try {
+    const existingSnap = await getDoc(doc(db, 'whitelist', emailKey));
+    if (existingSnap.exists()) {
+      const existingData = existingSnap.data() as WhitelistEntry;
+      if (existingData.active) {
+        return { email: emailKey, canCreateBoards: existingData.canCreateBoards === true };
+      }
+      throw new Error(
+        'Access for this email is currently paused by an administrator. Contact your admin to re-enable your account.'
+      );
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('currently paused')) {
+      throw error;
+    }
+    handleFirestoreError(error, OperationType.GET, whitelistPath);
+  }
+
+  const invitePath = `boards/${boardId}/invites/${inviteId}`;
+  let invData: BoardInvite | null = null;
+  try {
+    const invSnap = await getDoc(doc(db, 'boards', boardId, 'invites', inviteId));
+    if (!invSnap.exists()) {
+      throw new Error('This board invite link is invalid or no longer exists.');
+    }
+    invData = invSnap.data() as BoardInvite;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('invite link is invalid')) {
+      throw error;
+    }
+    handleFirestoreError(error, OperationType.GET, invitePath);
+  }
+
+  if (!invData.active) {
+    throw new Error('This board invite link has been revoked by the board creator.');
+  }
+
+  try {
+    await setDoc(doc(db, 'whitelist', emailKey), {
+      email: emailKey,
+      label: sanitizeText(invData.label || 'Board Invite', LIMITS.WHITELIST_LABEL_MAX),
+      active: true,
+      canCreateBoards: false,
+      addedBy: user.uid,
+      boardInviteBoardId: boardId,
+      boardInviteId: inviteId,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message.toLowerCase() : '';
+    if (msg.includes('permission') || msg.includes('insufficient')) {
+      throw new Error(
+        'Unable to activate workspace access with this board invite link. The board may have been archived or removed.'
+      );
+    }
+    handleFirestoreError(error, OperationType.CREATE, whitelistPath);
+  }
+
+  return { email: emailKey, canCreateBoards: false };
+}
+
 export async function redeemBoardInvite(
   user: User,
   boardId: string,
@@ -2074,6 +2479,12 @@ export async function redeemBoardInvite(
   assertValidId(user.uid, 'userId');
   assertValidId(boardId, 'boardId');
   assertValidId(inviteId, 'inviteId');
+
+  // Ensure non-admin users who arrive via a board invite link are whitelisted first
+  const adminCheck = await checkIsAdmin(user);
+  if (!adminCheck.isAdmin) {
+    await tryWhitelistFromBoardInvite(user, boardId, inviteId);
+  }
 
   let boardData: Board | null = null;
   try {
@@ -2123,6 +2534,12 @@ export async function redeemBoardInvite(
       LIMITS.USER_DISPLAY_NAME_MAX
     ) || 'Collaborator';
 
+  const resolvedTitle =
+    sanitizeText(
+      invite.boardTitle || (invite.label ? `Shared Board (${invite.label})` : 'Shared Board'),
+      LIMITS.BOARD_TITLE_MAX
+    ) || 'Shared Board';
+
   const memberPayload: Record<string, unknown> = {
     uid: user.uid,
     boardId,
@@ -2142,7 +2559,7 @@ export async function redeemBoardInvite(
   const refPayload: Record<string, unknown> = {
     boardId,
     userId: user.uid,
-    boardTitle: invite.label ? `Shared Board (${invite.label})` : 'Shared Board',
+    boardTitle: resolvedTitle,
     boardOwnerId: invite.ownerId,
     role: invite.role,
     createdAt: serverTimestamp(),
@@ -2521,6 +2938,88 @@ export async function bulkAddWhitelistEmails(
   }
 
   return { added, reactivated, invalid };
+}
+
+export async function bulkAddWhitelistByCreator(
+  actorUid: string,
+  rawText: string,
+  label: string
+): Promise<{
+  added: number;
+  alreadyActive: number;
+  paused: number;
+  invalid: string[];
+}> {
+  assertValidId(actorUid, 'userId');
+  const cleanLabel = sanitizeText(label, LIMITS.WHITELIST_LABEL_MAX);
+  const tokens = rawText
+    .split(/[\s,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  const uniqueValid = new Set<string>();
+  const invalid: string[] = [];
+
+  for (const token of tokens) {
+    const lower = token.toLowerCase();
+    if (
+      lower.length >= 3 &&
+      lower.length <= LIMITS.USER_EMAIL_MAX &&
+      EMAIL_KEY_REGEX.test(lower)
+    ) {
+      uniqueValid.add(lower);
+    } else {
+      invalid.push(token);
+    }
+  }
+
+  const emailsToAdd: string[] = [];
+  let alreadyActive = 0;
+  let paused = 0;
+
+  for (const emailKey of uniqueValid) {
+    const path = `whitelist/${emailKey}`;
+    try {
+      const snap = await getDoc(doc(db, 'whitelist', emailKey));
+      if (snap.exists()) {
+        const data = snap.data() as WhitelistEntry;
+        if (data.active) {
+          alreadyActive += 1;
+        } else {
+          paused += 1;
+        }
+      } else {
+        emailsToAdd.push(emailKey);
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, path);
+    }
+  }
+
+  let added = 0;
+  for (let i = 0; i < emailsToAdd.length; i += 400) {
+    const chunk = emailsToAdd.slice(i, i + 400);
+    const batch = writeBatch(db);
+    for (const emailKey of chunk) {
+      batch.set(doc(db, 'whitelist', emailKey), {
+        email: emailKey,
+        label: cleanLabel,
+        active: true,
+        canCreateBoards: false,
+        addedBy: actorUid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      added += 1;
+    }
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'whitelist');
+    }
+  }
+
+  return { added, alreadyActive, paused, invalid };
 }
 
 export async function setWhitelistEntryActive(rawEmail: string, active: boolean): Promise<void> {

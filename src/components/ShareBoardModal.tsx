@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Copy, Link2, Plus, Shield, Trash2, UserPlus, Users, X } from 'lucide-react';
+import { Check, Clock, Copy, Link2, Plus, Shield, Trash2, UserPlus, Users, X } from 'lucide-react';
 import {
   createBoardInvite,
   grantBoardAccessByEmail,
   grantBoardAccessByUid,
   revokeBoardAccess,
   revokeBoardInvite,
+  revokePendingBoardInvite,
   subscribeBoardInvites,
+  subscribeBoardPendingMembers,
   updateBoardCustomRoles,
   updateMemberPermissions,
 } from '../lib/kanbanService';
@@ -22,6 +24,7 @@ import {
   type BoardInvite,
   type BoardMember,
   type BoardPermissions,
+  type PendingBoardMemberNotice,
   type PermissionShape,
 } from '../types/kanban';
 
@@ -70,6 +73,7 @@ export function ShareBoardModal({
   const customRoles = useMemo(() => board.customRoles ?? [], [board.customRoles]);
 
   const [invites, setInvites] = useState<BoardInvite[]>([]);
+  const [pendingMembers, setPendingMembers] = useState<PendingBoardMemberNotice[]>([]);
   const [shareMode, setShareMode] = useState<'email' | 'uid'>('email');
   const [targetEmail, setTargetEmail] = useState('');
   const [targetUid, setTargetUid] = useState('');
@@ -102,8 +106,12 @@ export function ShareBoardModal({
 
   useEffect(() => {
     if (!canManageSharing) return;
-    const unsub = subscribeBoardInvites(board.id, setInvites);
-    return () => unsub();
+    const unsubInvites = subscribeBoardInvites(board.id, setInvites);
+    const unsubPending = subscribeBoardPendingMembers(board.id, setPendingMembers);
+    return () => {
+      unsubInvites();
+      unsubPending();
+    };
   }, [board.id, canManageSharing]);
 
   useEffect(() => {
@@ -168,13 +176,20 @@ export function ShareBoardModal({
         const cleanEmail = targetEmail.trim();
         if (!cleanEmail) throw new Error('Enter an email address.');
         const res = await grantBoardAccessByEmail(
+          uid,
           board,
           cleanEmail,
           resolvedGrantRole.role,
           permissions,
           resolvedGrantRole.customRoleName
         );
-        setSuccessMsg(`Granted ${resolvedGrantRole.label} access to ${res.displayName}.`);
+        if (res.pending) {
+          setSuccessMsg(
+            `Added ${res.displayName} to the workspace (without Board creation permissions) and queued ${resolvedGrantRole.label} Board access until they sign in.`
+          );
+        } else {
+          setSuccessMsg(`Granted ${resolvedGrantRole.label} access to ${res.displayName}.`);
+        }
         setTargetEmail('');
       } else {
         const cleanUid = targetUid.trim();
@@ -443,33 +458,38 @@ export function ShareBoardModal({
               </div>
 
               {shareMode === 'email' ? (
-                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                  <div className="sm:col-span-7">
-                    <label htmlFor="share-email-input" className="sr-only">
-                      Teammate email
-                    </label>
-                    <input
-                      id="share-email-input"
-                      type="email"
-                      value={targetEmail}
-                      onChange={(e) => setTargetEmail(e.target.value)}
-                      placeholder="teammate@example.com"
-                      className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
-                    />
+                <div className="space-y-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                    <div className="sm:col-span-7">
+                      <label htmlFor="share-email-input" className="sr-only">
+                        Teammate email
+                      </label>
+                      <input
+                        id="share-email-input"
+                        type="email"
+                        value={targetEmail}
+                        onChange={(e) => setTargetEmail(e.target.value)}
+                        placeholder="teammate@example.com"
+                        className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                      />
+                    </div>
+                    <div className="sm:col-span-5">
+                      <label htmlFor="share-role-select" className="sr-only">
+                        Collaborator role
+                      </label>
+                      <select
+                        id="share-role-select"
+                        value={resolvedGrantRole.selectValue}
+                        onChange={(e) => handleGrantRoleSelect(e.target.value)}
+                        className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                      >
+                        {renderRoleOptions(resolvedGrantRole.selectValue)}
+                      </select>
+                    </div>
                   </div>
-                  <div className="sm:col-span-5">
-                    <label htmlFor="share-role-select" className="sr-only">
-                      Collaborator role
-                    </label>
-                    <select
-                      id="share-role-select"
-                      value={resolvedGrantRole.selectValue}
-                      onChange={(e) => handleGrantRoleSelect(e.target.value)}
-                      className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
-                    >
-                      {renderRoleOptions(resolvedGrantRole.selectValue)}
-                    </select>
-                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Unregistered emails are automatically added to the workspace (without Board creation permissions) and receive Board access immediately upon signing in.
+                  </p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
@@ -634,6 +654,52 @@ export function ShareBoardModal({
                 );
               })}
             </div>
+
+            {canManageSharing && pendingMembers.length > 0 && (
+              <div className="space-y-2 pt-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Pending First Sign-In ({pendingMembers.length})</span>
+                  </h4>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Activates automatically when they sign in with Google
+                  </span>
+                </div>
+                <div className="border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-200 dark:divide-slate-800">
+                  {pendingMembers.map((notice) => {
+                    const roleLabel =
+                      notice.role === 'custom' && notice.customRoleName
+                        ? notice.customRoleName
+                        : ROLE_PRESETS[notice.role].label;
+                    return (
+                      <div
+                        key={notice.emailHash}
+                        className="px-4 py-2.5 flex items-center justify-between gap-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-xs font-medium text-slate-900 dark:text-slate-100 font-mono truncate">
+                            {notice.maskedEmail}
+                          </div>
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                            {roleLabel} · Awaiting first sign-in
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => revokePendingBoardInvite(board.id, notice.emailHash)}
+                          aria-label={`Revoke pending access for ${notice.maskedEmail}`}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400 hover:underline whitespace-nowrap shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Revoke</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Board Custom Roles */}
