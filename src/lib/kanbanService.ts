@@ -1746,6 +1746,51 @@ export async function toggleTaskNotifications(
   }
 }
 
+export async function updateTaskReviewer(
+  boardId: string,
+  taskId: string,
+  reviewerId: string
+): Promise<void> {
+  assertValidId(boardId, 'boardId');
+  assertValidId(taskId, 'taskId');
+  if (reviewerId) {
+    assertValidId(reviewerId, 'reviewerId');
+  }
+
+  const path = `boards/${boardId}/tasks/${taskId}`;
+  try {
+    await updateDoc(doc(db, 'boards', boardId, 'tasks', taskId), {
+      reviewerId,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function toggleTaskReviewed(
+  boardId: string,
+  taskId: string,
+  reviewed: boolean,
+  actorUid: string
+): Promise<void> {
+  assertValidId(boardId, 'boardId');
+  assertValidId(taskId, 'taskId');
+  assertValidId(actorUid, 'actorUid');
+
+  const path = `boards/${boardId}/tasks/${taskId}`;
+  try {
+    await updateDoc(doc(db, 'boards', boardId, 'tasks', taskId), {
+      reviewed,
+      reviewedAt: reviewed ? getTodayDateKey() : '',
+      reviewedBy: reviewed ? actorUid : '',
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
 export async function deleteTask(boardId: string, taskId: string): Promise<void> {
   assertValidId(boardId, 'boardId');
   assertValidId(taskId, 'taskId');

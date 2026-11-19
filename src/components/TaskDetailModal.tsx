@@ -13,6 +13,7 @@ import {
   MessageSquare,
   Plus,
   Send,
+  ShieldCheck,
   Trash2,
   X,
 } from 'lucide-react';
@@ -29,7 +30,9 @@ import {
   sendTaskMessage,
   subscribeSubtasks,
   toggleSubtaskCompleted,
+  toggleTaskReviewed,
   updateTaskDetails,
+  updateTaskReviewer,
 } from '../lib/kanbanService';
 import {
   LIMITS,
@@ -108,6 +111,11 @@ export function TaskDetailModal({
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [newMessageText, setNewMessageText] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
+  const [reviewerId, setReviewerId] = useState(task.reviewerId ?? '');
+  const [reviewed, setReviewed] = useState(Boolean(task.reviewed));
+  const [reviewedAt, setReviewedAt] = useState(task.reviewedAt ?? '');
+  const [reviewedBy, setReviewedBy] = useState(task.reviewedBy ?? '');
+  const [savingReview, setSavingReview] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -137,6 +145,10 @@ export function TaskDetailModal({
     setTags(task.tags);
     setLinks(task.links ?? []);
     setMilestones(task.milestones ?? []);
+    setReviewerId(task.reviewerId ?? '');
+    setReviewed(Boolean(task.reviewed));
+    setReviewedAt(task.reviewedAt ?? '');
+    setReviewedBy(task.reviewedBy ?? '');
   }, [task]);
 
   useEffect(() => {
@@ -303,6 +315,52 @@ export function TaskDetailModal({
       setSendingMessage(false);
     }
   };
+
+  const handleReviewerChange = async (nextReviewerId: string) => {
+    if (!canEditTasks || savingReview) return;
+    const prevReviewerId = reviewerId;
+    setReviewerId(nextReviewerId);
+    setSavingReview(true);
+    setErrorMsg(null);
+    try {
+      await updateTaskReviewer(board.id, task.id, nextReviewerId);
+    } catch (err) {
+      setReviewerId(prevReviewerId);
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to assign reviewer.');
+    } finally {
+      setSavingReview(false);
+    }
+  };
+
+  const handleToggleReviewed = async () => {
+    if (!canEditTasks || savingReview) return;
+    const prevReviewed = reviewed;
+    const prevReviewedAt = reviewedAt;
+    const prevReviewedBy = reviewedBy;
+    const nextReviewed = !reviewed;
+
+    setReviewed(nextReviewed);
+    setReviewedAt(nextReviewed ? getTodayDateKey() : '');
+    setReviewedBy(nextReviewed ? uid : '');
+    setSavingReview(true);
+    setErrorMsg(null);
+    try {
+      await toggleTaskReviewed(board.id, task.id, nextReviewed, uid);
+    } catch (err) {
+      setReviewed(prevReviewed);
+      setReviewedAt(prevReviewedAt);
+      setReviewedBy(prevReviewedBy);
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to update review status.');
+    } finally {
+      setSavingReview(false);
+    }
+  };
+
+  const reviewedByLabel = reviewedBy
+    ? reviewedBy === uid
+      ? 'You'
+      : assigneeOptions.find((opt) => opt.uid === reviewedBy)?.label || 'Team member'
+    : '';
 
   const completedSubtasks = subtasks.filter((s) => s.completed).length;
 
@@ -979,6 +1037,99 @@ export function TaskDetailModal({
                 Board is archived. Chat log is read-only.
               </p>
             )}
+          </div>
+
+          {/* Review & Sign-Off */}
+          <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <ShieldCheck
+                  className={`w-3.5 h-3.5 ${
+                    reviewed
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-slate-500 dark:text-slate-400'
+                  }`}
+                />
+                <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  Review &amp; Sign-Off
+                </h3>
+              </div>
+              {reviewed && (
+                <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300 tabular-nums">
+                  {reviewedByLabel ? `Reviewed by ${reviewedByLabel}` : 'Reviewed'}
+                  {reviewedAt ? ` · ${reviewedAt}` : ''}
+                </span>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 p-3.5 flex flex-col sm:flex-row sm:items-end justify-between gap-3.5">
+              <div className="flex-1 min-w-0 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <label
+                    htmlFor="task-reviewer-select"
+                    className="block text-xs font-medium text-slate-600 dark:text-slate-400"
+                  >
+                    Reviewer
+                  </label>
+                  {canEditTasks &&
+                    reviewerId !== uid &&
+                    assigneeOptions.some((opt) => opt.uid === uid) && (
+                      <button
+                        type="button"
+                        disabled={savingReview}
+                        onClick={() => void handleReviewerChange(uid)}
+                        className="text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap disabled:opacity-50"
+                      >
+                        Assign me
+                      </button>
+                    )}
+                </div>
+                <select
+                  id="task-reviewer-select"
+                  disabled={!canEditTasks || savingReview}
+                  value={reviewerId}
+                  onChange={(e) => void handleReviewerChange(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:opacity-60"
+                >
+                  <option value="">Unassigned</option>
+                  {assigneeOptions.map((opt) => (
+                    <option key={opt.uid} value={opt.uid}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                {reviewerId && assigneeId && reviewerId === assigneeId && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                    Reviewer is currently the same person as the assignee.
+                  </p>
+                )}
+              </div>
+
+              <div className="shrink-0 flex items-center justify-between sm:justify-end gap-3 pt-1 sm:pt-0">
+                <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Reviewed
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={reviewed}
+                  aria-label="Mark task reviewed"
+                  disabled={!canEditTasks || savingReview}
+                  onClick={() => void handleToggleReviewed()}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 disabled:opacity-60 ${
+                    reviewed
+                      ? 'bg-emerald-600 border-emerald-600 dark:bg-emerald-500 dark:border-emerald-500'
+                      : 'bg-slate-200 border-slate-300 dark:bg-slate-800 dark:border-slate-700'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${
+                      reviewed ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 

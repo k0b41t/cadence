@@ -942,6 +942,27 @@
           "type": "boolean",
           "description": "Whether due-date and milestone notifications are enabled for this task."
         },
+        "reviewerId": {
+          "type": "string",
+          "description": "Optional UID of the assigned reviewer.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]*$"
+        },
+        "reviewed": {
+          "type": "boolean",
+          "description": "Whether the task has been reviewed and approved."
+        },
+        "reviewedAt": {
+          "type": "string",
+          "description": "Optional YYYY-MM-DD date when the task was marked reviewed or empty string.",
+          "maxLength": 32
+        },
+        "reviewedBy": {
+          "type": "string",
+          "description": "Optional UID of the user who marked the task reviewed or empty string.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]*$"
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",

@@ -441,6 +441,10 @@ export interface Task {
   links?: TaskLink[];
   milestones?: TaskMilestone[];
   notificationsEnabled?: boolean;
+  reviewerId?: string;
+  reviewed?: boolean;
+  reviewedAt?: string;
+  reviewedBy?: string;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }

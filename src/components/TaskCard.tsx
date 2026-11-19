@@ -1,11 +1,12 @@
 import { useState, type DragEvent } from 'react';
-import { BellOff, Check, ChevronDown, Circle, Flag, Link2, MessageSquare } from 'lucide-react';
+import { BellOff, Check, ChevronDown, Circle, Flag, Link2, MessageSquare, ShieldCheck } from 'lucide-react';
 import type { Priority, Subtask, Task } from '../types/kanban';
 
 interface TaskCardProps {
   task: Task;
   canEdit: boolean;
   assigneeName?: string;
+  reviewerName?: string;
   messageCount?: number;
   subtasks?: Subtask[];
   isDragging: boolean;
@@ -49,6 +50,7 @@ export function TaskCard({
   task,
   canEdit,
   assigneeName,
+  reviewerName,
   messageCount = 0,
   subtasks = [],
   isDragging,
@@ -230,6 +232,36 @@ export function TaskCard({
                   <span>{messageCount}</span>
                 </span>
               </>
+            )}
+
+            {task.reviewed ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span
+                  title={
+                    reviewerName
+                      ? `Reviewed (Reviewer: ${reviewerName})`
+                      : 'Marked reviewed'
+                  }
+                  className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium"
+                >
+                  <ShieldCheck className="w-3 h-3" />
+                  <span>Reviewed</span>
+                </span>
+              </>
+            ) : (
+              reviewerName && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span
+                    title={`Reviewer: ${reviewerName}`}
+                    className="inline-flex items-center gap-1 text-slate-500 dark:text-slate-400 truncate max-w-[130px]"
+                  >
+                    <ShieldCheck className="w-3 h-3 shrink-0" />
+                    <span className="truncate">{reviewerName}</span>
+                  </span>
+                </>
+              )
             )}
 
             {task.notificationsEnabled === false && (

@@ -453,6 +453,10 @@ service cloud.firestore {
         && (!('links' in data) || isValidTaskLinks(data.links))
         && (!('milestones' in data) || isValidTaskMilestones(data.milestones))
         && (!('notificationsEnabled' in data) || data.notificationsEnabled is bool)
+        && (!('reviewerId' in data) || isValidOptionalId(data.reviewerId))
+        && (!('reviewed' in data) || data.reviewed is bool)
+        && (!('reviewedAt' in data) || isValidDateString(data.reviewedAt))
+        && (!('reviewedBy' in data) || isValidOptionalId(data.reviewedBy))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -1075,7 +1079,7 @@ service cloud.firestore {
           && isValidId(boardId)
           && isValidId(taskId)
           && incoming().keys().hasAll(['id', 'boardId', 'columnId', 'ownerId', 'createdBy', 'assigneeId', 'title', 'description', 'priority', 'position', 'tags', 'dueDate', 'completed', 'createdAt', 'updatedAt'])
-          && incoming().keys().hasOnly(['id', 'boardId', 'columnId', 'ownerId', 'createdBy', 'assigneeId', 'title', 'description', 'priority', 'position', 'tags', 'dueDate', 'completed', 'placedOnColumnAt', 'completedAt', 'links', 'milestones', 'notificationsEnabled', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'boardId', 'columnId', 'ownerId', 'createdBy', 'assigneeId', 'title', 'description', 'priority', 'position', 'tags', 'dueDate', 'completed', 'placedOnColumnAt', 'completedAt', 'links', 'milestones', 'notificationsEnabled', 'reviewerId', 'reviewed', 'reviewedAt', 'reviewedBy', 'createdAt', 'updatedAt'])
           && isValidTask(incoming(), boardId, taskId)
           && incoming().createdBy == request.auth.uid
           && incoming().createdAt == request.time
@@ -1084,6 +1088,7 @@ service cloud.firestore {
           && incoming().ownerId == getBoard(boardId).data.ownerId
           && exists(/databases/$(database)/documents/boards/$(boardId)/columns/$(incoming().columnId))
           && isValidAssignee(boardId, incoming().assigneeId)
+          && (!('reviewerId' in incoming()) || isValidAssignee(boardId, incoming().reviewerId))
           && (isAdmin() || (isBoardActive(boardId) && canCreateTasksOnBoard(boardId)));
 
         allow update: if isAllowedWorkspaceUser()
@@ -1103,6 +1108,18 @@ service cloud.firestore {
             || (('assigneeId' in existing()) && incoming().assigneeId == existing().assigneeId)
             || isValidAssignee(boardId, incoming().assigneeId)
           )
+          && (
+            !('reviewerId' in incoming())
+            || incoming().reviewerId == ''
+            || (('reviewerId' in existing()) && incoming().reviewerId == existing().reviewerId)
+            || isValidAssignee(boardId, incoming().reviewerId)
+          )
+          && (
+            !('reviewedBy' in incoming())
+            || incoming().reviewedBy == ''
+            || (('reviewedBy' in existing()) && incoming().reviewedBy == existing().reviewedBy)
+            || incoming().reviewedBy == request.auth.uid
+          )
           && (isAdmin() || (isBoardActive(boardId) && canEditTasksOnBoard(boardId)))
           && (
             incoming().diff(existing()).affectedKeys().hasOnly(['columnId', 'position', 'placedOnColumnAt', 'updatedAt']) ||
@@ -1113,7 +1130,10 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'updatedAt']) ||
             incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'completedAt', 'updatedAt']) ||
             incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'updatedAt']) ||
-            incoming().diff(existing()).affectedKeys().hasOnly(['notificationsEnabled', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['notificationsEnabled', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['reviewerId', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['reviewed', 'reviewedAt', 'reviewedBy', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['reviewerId', 'reviewed', 'reviewedAt', 'reviewedBy', 'updatedAt'])
           );
 
         allow delete: if isAllowedWorkspaceUser()

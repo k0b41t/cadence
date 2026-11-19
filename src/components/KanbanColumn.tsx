@@ -306,6 +306,7 @@ export function KanbanColumn({
                   task={task}
                   canEdit={canEditTasks}
                   assigneeName={task.assigneeId ? assigneeNames[task.assigneeId] : undefined}
+                  reviewerName={task.reviewerId ? assigneeNames[task.reviewerId] : undefined}
                   messageCount={messageCounts[task.id] ?? 0}
                   subtasks={subtasksByTask?.[task.id]}
                   isDragging={draggedTaskId === task.id}
