@@ -235,7 +235,7 @@ export async function checkIsAdmin(user: User): Promise<{ isAdmin: boolean; isBo
 
 export async function ensureUserAndStarterWorkspace(
   user: User,
-  canCreateBoards = true
+  _canCreateBoards = true
 ): Promise<UserProfile> {
   assertValidId(user.uid, 'userId');
   const userPath = `users/${user.uid}`;
@@ -356,29 +356,6 @@ export async function ensureUserAndStarterWorkspace(
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, adminPath);
-    }
-  }
-
-  // Provision starter board only if the user can create boards and has 0 accessible boards
-  if (canCreateBoards) {
-    try {
-      const [ownedSnaps, sharedSnaps] = await Promise.all([
-        getDocs(query(collection(db, 'boards'), where('ownerId', '==', user.uid))),
-        getDocs(query(collection(db, 'users', user.uid, 'boardRefs'), where('userId', '==', user.uid))),
-      ]);
-      if (ownedSnaps.empty && sharedSnaps.empty) {
-        const boardId = await createBoard(
-          user.uid,
-          'Product Launch',
-          'Track milestones, design reviews, and release engineering tasks.',
-          'standard',
-          true,
-          displayName
-        );
-        await updateUserActiveBoard(user.uid, boardId);
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.LIST, 'boards');
     }
   }
 
