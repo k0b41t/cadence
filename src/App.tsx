@@ -11,6 +11,7 @@ import {
   Plus,
   Search,
   Settings,
+  ShieldAlert,
   SlidersHorizontal,
   Undo2,
   Users,
@@ -78,6 +79,7 @@ import {
 } from './lib/kanbanService';
 import {
   ID_REGEX,
+  isColumnReviewGated,
   LIMITS,
   resolveRoleFromPermissions,
   type Board,
@@ -299,6 +301,22 @@ function WorkspaceApp() {
     }, 7000);
     return () => window.clearTimeout(timer);
   }, [autoMoveToast]);
+
+  const [reviewBlockToast, setReviewBlockToast] = useState<{
+    id: string;
+    taskId: string;
+    taskTitle: string;
+    targetColumnTitle: string;
+    reason: 'move' | 'automove';
+  } | null>(null);
+
+  useEffect(() => {
+    if (!reviewBlockToast) return;
+    const timer = window.setTimeout(() => {
+      setReviewBlockToast(null);
+    }, 7000);
+    return () => window.clearTimeout(timer);
+  }, [reviewBlockToast]);
 
   // Sync theme, active mode color palette & fonts to <html>
   useEffect(() => {
@@ -980,6 +998,23 @@ function WorkspaceApp() {
     setDraggedTask(null);
     setDropTarget(null);
 
+    const targetColumn = columns.find((c) => c.id === targetColumnId);
+    if (
+      taskToMove.columnId !== targetColumnId &&
+      targetColumn &&
+      isColumnReviewGated(targetColumn) &&
+      !taskToMove.reviewed
+    ) {
+      setReviewBlockToast({
+        id: `${taskToMove.id}-${Date.now()}`,
+        taskId: taskToMove.id,
+        taskTitle: taskToMove.title,
+        targetColumnTitle: targetColumn.title,
+        reason: 'move',
+      });
+      return;
+    }
+
     const colTasks = tasks
       .filter((t) => t.columnId === targetColumnId && t.id !== taskToMove.id)
       .sort((a, b) => a.position - b.position);
@@ -1035,6 +1070,17 @@ function WorkspaceApp() {
         )
       : columns[sourceIndex + 1];
     if (!targetColumn) return;
+
+    if (isColumnReviewGated(targetColumn) && !task.reviewed) {
+      setReviewBlockToast({
+        id: `${task.id}-${Date.now()}`,
+        taskId: task.id,
+        taskTitle: task.title,
+        targetColumnTitle: targetColumn.title,
+        reason: 'automove',
+      });
+      return;
+    }
 
     const targetColTasks = tasks.filter(
       (t) => t.columnId === targetColumn.id && t.id !== task.id
@@ -1616,6 +1662,12 @@ function WorkspaceApp() {
                     subtasksByTask={subtasksByTask}
                     draggedTaskId={draggedTask?.id ?? null}
                     dropTarget={dropTarget}
+                    isReviewBlockedDrop={Boolean(
+                      draggedTask &&
+                        draggedTask.columnId !== col.id &&
+                        isColumnReviewGated(col) &&
+                        !draggedTask.reviewed
+                    )}
                     onDragStartTask={handleDragStartTask}
                     onDragEndTask={handleDragEndTask}
                     onDragOverColumn={handleDragOverColumn}
@@ -1853,6 +1905,52 @@ function WorkspaceApp() {
             <button
               type="button"
               onClick={() => setAutoMoveToast(null)}
+              aria-label="Dismiss notification"
+              className="p-1 text-slate-400 hover:text-white dark:text-slate-500 dark:hover:text-slate-900 rounded-md transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {reviewBlockToast && (
+        <div
+          role="alert"
+          className="fixed bottom-5 left-4 right-4 sm:left-auto sm:right-5 z-[60] sm:max-w-md bg-slate-900 dark:bg-slate-100 text-slate-100 dark:text-slate-900 border border-amber-500/60 dark:border-amber-600 rounded-xl shadow-lg px-4 py-3 flex items-center justify-between gap-3"
+        >
+          <div className="flex items-start gap-2.5 min-w-0 flex-1 text-xs">
+            <ShieldAlert className="w-4 h-4 text-amber-400 dark:text-amber-600 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="font-medium truncate">
+                {reviewBlockToast.reason === 'automove'
+                  ? `Checklist done for "${reviewBlockToast.taskTitle}"`
+                  : `"${reviewBlockToast.taskTitle}" needs review first`}
+              </p>
+              <p className="text-slate-300 dark:text-slate-600 mt-0.5">
+                Mark this task as Reviewed before moving to{' '}
+                <span className="font-medium text-white dark:text-slate-950">
+                  {reviewBlockToast.targetColumnTitle}
+                </span>
+                .
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setTaskModalFocusChat(false);
+                setSelectedTaskId(reviewBlockToast.taskId);
+                setReviewBlockToast(null);
+              }}
+              className="px-2.5 py-1.5 text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg transition-colors whitespace-nowrap"
+            >
+              Open Task
+            </button>
+            <button
+              type="button"
+              onClick={() => setReviewBlockToast(null)}
               aria-label="Dismiss notification"
               className="p-1 text-slate-400 hover:text-white dark:text-slate-500 dark:hover:text-slate-900 rounded-md transition-colors"
             >

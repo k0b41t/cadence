@@ -389,6 +389,7 @@ service cloud.firestore {
         && (!('colorRules' in data) || isValidColumnColorRules(data.colorRules))
         && (!('autoMoveOnComplete' in data) || data.autoMoveOnComplete is bool)
         && (!('autoMoveTargetColumnId' in data) || isValidOptionalId(data.autoMoveTargetColumnId))
+        && (!('requireReviewBeforeMove' in data) || data.requireReviewBeforeMove is bool)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -1031,7 +1032,7 @@ service cloud.firestore {
           && isValidId(boardId)
           && isValidId(columnId)
           && incoming().keys().hasAll(['id', 'boardId', 'ownerId', 'createdBy', 'title', 'position', 'wipLimit', 'createdAt', 'updatedAt'])
-          && incoming().keys().hasOnly(['id', 'boardId', 'ownerId', 'createdBy', 'title', 'position', 'wipLimit', 'colorRules', 'autoMoveOnComplete', 'autoMoveTargetColumnId', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'boardId', 'ownerId', 'createdBy', 'title', 'position', 'wipLimit', 'colorRules', 'autoMoveOnComplete', 'autoMoveTargetColumnId', 'requireReviewBeforeMove', 'createdAt', 'updatedAt'])
           && isValidColumn(incoming(), boardId, columnId)
           && incoming().createdBy == request.auth.uid
           && incoming().createdAt == request.time
@@ -1052,6 +1053,7 @@ service cloud.firestore {
           && incoming().updatedAt == request.time
           && (isAdmin() || (isBoardActive(boardId) && canManageColumnsOnBoard(boardId)))
           && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'wipLimit', 'colorRules', 'autoMoveOnComplete', 'autoMoveTargetColumnId', 'requireReviewBeforeMove', 'updatedAt']) ||
             incoming().diff(existing()).affectedKeys().hasOnly(['title', 'wipLimit', 'colorRules', 'autoMoveOnComplete', 'autoMoveTargetColumnId', 'updatedAt']) ||
             incoming().diff(existing()).affectedKeys().hasOnly(['title', 'wipLimit', 'colorRules', 'updatedAt']) ||
             incoming().diff(existing()).affectedKeys().hasOnly(['title', 'wipLimit', 'updatedAt']) ||

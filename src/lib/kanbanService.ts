@@ -1473,6 +1473,7 @@ export async function updateColumnDetails(
   automation?: {
     autoMoveOnComplete: boolean;
     autoMoveTargetColumnId: string;
+    requireReviewBeforeMove?: boolean;
   }
 ): Promise<void> {
   assertValidId(boardId, 'boardId');
@@ -1498,6 +1499,9 @@ export async function updateColumnDetails(
       payload.autoMoveTargetColumnId = '';
     }
     payload.autoMoveOnComplete = Boolean(automation.autoMoveOnComplete);
+    if (typeof automation.requireReviewBeforeMove === 'boolean') {
+      payload.requireReviewBeforeMove = automation.requireReviewBeforeMove;
+    }
   }
 
   const path = `boards/${boardId}/columns/${columnId}`;

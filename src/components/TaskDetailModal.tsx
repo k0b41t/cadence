@@ -35,6 +35,7 @@ import {
   updateTaskReviewer,
 } from '../lib/kanbanService';
 import {
+  isColumnReviewGated,
   LIMITS,
   type Board,
   type Column,
@@ -230,6 +231,14 @@ export function TaskDetailModal({
       return;
     }
 
+    const targetCol = columns.find((c) => c.id === columnId);
+    if (targetCol && targetCol.id !== task.columnId && isColumnReviewGated(targetCol) && !reviewed) {
+      setErrorMsg(
+        `Mark this task as Reviewed in the Review & Sign-Off section below before moving it to "${targetCol.title}".`
+      );
+      return;
+    }
+
     setSaving(true);
     setErrorMsg(null);
     try {
@@ -362,6 +371,14 @@ export function TaskDetailModal({
       : assigneeOptions.find((opt) => opt.uid === reviewedBy)?.label || 'Team member'
     : '';
 
+  const selectedTargetColumn = columns.find((c) => c.id === columnId);
+  const isReviewBlockedColumn = Boolean(
+    selectedTargetColumn &&
+      selectedTargetColumn.id !== task.columnId &&
+      isColumnReviewGated(selectedTargetColumn) &&
+      !reviewed
+  );
+
   const completedSubtasks = subtasks.filter((s) => s.completed).length;
 
   return (
@@ -472,12 +489,20 @@ export function TaskDetailModal({
                   }}
                   className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:opacity-60"
                 >
-                  {columns.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.title}
-                    </option>
-                  ))}
+                  {columns.map((c) => {
+                    const gated = c.id !== task.columnId && isColumnReviewGated(c) && !reviewed;
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {gated ? `${c.title} (requires Reviewed)` : c.title}
+                      </option>
+                    );
+                  })}
                 </select>
+                {isReviewBlockedColumn && selectedTargetColumn && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                    Mark this task as Reviewed below before moving to {selectedTargetColumn.title}.
+                  </p>
+                )}
               </div>
 
               <div className="space-y-1.5">

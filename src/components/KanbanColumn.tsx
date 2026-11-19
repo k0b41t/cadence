@@ -1,7 +1,14 @@
 import { useState, type CSSProperties, type DragEvent } from 'react';
-import { ArrowRightCircle, Plus, Settings2 } from 'lucide-react';
+import { ArrowRightCircle, Plus, Settings2, ShieldCheck } from 'lucide-react';
 import { isPresetColumnColor, parseColumnColorToRgb } from '../lib/colorUtils';
-import { LIMITS, type Column, type PresetColumnBgColor, type Subtask, type Task } from '../types/kanban';
+import {
+  isColumnReviewGated,
+  LIMITS,
+  type Column,
+  type PresetColumnBgColor,
+  type Subtask,
+  type Task,
+} from '../types/kanban';
 import { TaskCard } from './TaskCard';
 
 interface KanbanColumnProps {
@@ -15,6 +22,7 @@ interface KanbanColumnProps {
   subtasksByTask?: Record<string, Subtask[]>;
   draggedTaskId: string | null;
   dropTarget: { columnId: string; index: number } | null;
+  isReviewBlockedDrop?: boolean;
   onDragStartTask: (e: DragEvent<HTMLDivElement>, task: Task) => void;
   onDragEndTask: () => void;
   onDragOverColumn: (e: DragEvent<HTMLElement>, columnId: string, index: number) => void;
@@ -80,6 +88,7 @@ export function KanbanColumn({
   subtasksByTask,
   draggedTaskId,
   dropTarget,
+  isReviewBlockedDrop = false,
   onDragStartTask,
   onDragEndTask,
   onDragOverColumn,
@@ -168,11 +177,15 @@ export function KanbanColumn({
           : customRgb
             ? 'bg-[rgba(var(--col-rgb),0.14)] dark:bg-[rgba(var(--col-rgb),0.22)]'
             : isDropTargetColumn
-              ? 'bg-blue-50/50 dark:bg-blue-950/35'
+              ? isReviewBlockedDrop
+                ? 'bg-amber-50/70 dark:bg-amber-950/35'
+                : 'bg-blue-50/50 dark:bg-blue-950/35'
               : 'bg-slate-100/80 dark:bg-slate-900/50'
       } ${
         isDropTargetColumn
-          ? 'border-blue-500 dark:border-blue-400 ring-2 ring-blue-500/85 dark:ring-blue-400/85 shadow-md'
+          ? isReviewBlockedDrop
+            ? 'border-amber-500 dark:border-amber-400 ring-2 ring-amber-500/80 dark:ring-amber-400/80 shadow-md'
+            : 'border-blue-500 dark:border-blue-400 ring-2 ring-blue-500/85 dark:ring-blue-400/85 shadow-md'
           : presetStyles
             ? presetStyles.border
             : customRgb
@@ -184,7 +197,9 @@ export function KanbanColumn({
       <div
         className={`px-3.5 py-3 flex items-center justify-between gap-2 border-b shrink-0 transition-colors ${
           isDropTargetColumn
-            ? 'border-blue-200 dark:border-blue-800/80'
+            ? isReviewBlockedDrop
+              ? 'border-amber-200 dark:border-amber-800/80'
+              : 'border-blue-200 dark:border-blue-800/80'
             : 'border-slate-200/70 dark:border-slate-800/80'
         }`}
       >
@@ -211,12 +226,26 @@ export function KanbanColumn({
               <ArrowRightCircle className="w-3.5 h-3.5" />
             </span>
           )}
+          {isColumnReviewGated(column) && (
+            <span
+              title="Requires tasks to be marked Reviewed before moving here"
+              className="inline-flex items-center text-emerald-600/80 dark:text-emerald-400/80 shrink-0"
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
           {isDropTargetColumn && (
-            <span className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 whitespace-nowrap">
-              Drop target
+            <span
+              className={`text-[11px] font-semibold whitespace-nowrap ${
+                isReviewBlockedDrop
+                  ? 'text-amber-600 dark:text-amber-400'
+                  : 'text-blue-600 dark:text-blue-400'
+              }`}
+            >
+              {isReviewBlockedDrop ? 'Requires Reviewed' : 'Drop target'}
             </span>
           )}
           {canManageColumns && (
@@ -256,11 +285,17 @@ export function KanbanColumn({
             }}
             className={`h-24 rounded-lg border-2 border-dashed flex items-center justify-center text-xs transition-colors ${
               isDropTargetColumn
-                ? 'border-blue-500 dark:border-blue-400 bg-blue-50/80 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 font-medium'
+                ? isReviewBlockedDrop
+                  ? 'border-amber-500 dark:border-amber-400 bg-amber-50/80 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 font-medium'
+                  : 'border-blue-500 dark:border-blue-400 bg-blue-50/80 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 font-medium'
                 : 'border-slate-300/80 dark:border-slate-700/80 text-slate-400 dark:text-slate-500'
             }`}
           >
-            {isDropTargetColumn ? 'Drop task here' : 'No tasks in this stage'}
+            {isDropTargetColumn
+              ? isReviewBlockedDrop
+                ? 'Mark task Reviewed first'
+                : 'Drop task here'
+              : 'No tasks in this stage'}
           </div>
         ) : (
           tasks.map((task, idx) => {
@@ -288,7 +323,7 @@ export function KanbanColumn({
                   onDropOnColumn(e, column.id, isUpperHalf ? idx : idx + 1);
                 }}
               >
-                {showDropBefore && (
+                {showDropBefore && !isReviewBlockedDrop && (
                   <div
                     aria-hidden="true"
                     className="relative -mt-1.5 mb-1.5 h-2 flex items-center pointer-events-none"
@@ -322,6 +357,7 @@ export function KanbanColumn({
         )}
 
         {isDropTargetColumn &&
+          !isReviewBlockedDrop &&
           dropTarget?.index === tasks.length &&
           tasks.length > 0 && (
             <div

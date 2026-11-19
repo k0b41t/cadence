@@ -828,6 +828,10 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]*$"
         },
+        "requireReviewBeforeMove": {
+          "type": "boolean",
+          "description": "When true, tasks must be marked Reviewed before they can be moved into this column."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",

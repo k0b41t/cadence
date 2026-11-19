@@ -418,8 +418,18 @@ export interface Column {
   colorRules?: ColumnColorRule[];
   autoMoveOnComplete?: boolean;
   autoMoveTargetColumnId?: string;
+  requireReviewBeforeMove?: boolean;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
+}
+
+export function isColumnReviewGated(
+  column: Pick<Column, 'title' | 'requireReviewBeforeMove'>
+): boolean {
+  if (typeof column.requireReviewBeforeMove === 'boolean') {
+    return column.requireReviewBeforeMove;
+  }
+  return column.title.trim().toLowerCase() === 'done';
 }
 
 export interface Task {

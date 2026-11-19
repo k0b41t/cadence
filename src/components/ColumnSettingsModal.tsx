@@ -17,6 +17,7 @@ import {
   updateColumnDetails,
 } from '../lib/kanbanService';
 import {
+  isColumnReviewGated,
   LIMITS,
   type Column,
   type ColumnBgColor,
@@ -60,6 +61,9 @@ export function ColumnSettingsModal({
     otherColumns.some((c) => c.id === column.autoMoveTargetColumnId)
       ? (column.autoMoveTargetColumnId ?? '')
       : ''
+  );
+  const [requireReviewBeforeMove, setRequireReviewBeforeMove] = useState<boolean>(() =>
+    isColumnReviewGated(column)
   );
 
   const columnTasks = allTasks.filter((t) => t.columnId === column.id);
@@ -128,6 +132,7 @@ export function ColumnSettingsModal({
       await updateColumnDetails(boardId, column.id, title, parsedWip, colorRules, {
         autoMoveOnComplete,
         autoMoveTargetColumnId,
+        requireReviewBeforeMove,
       });
       onClose();
     } finally {
@@ -408,6 +413,25 @@ export function ColumnSettingsModal({
                 )}
               </div>
             )}
+
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800/70">
+              <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={requireReviewBeforeMove}
+                  onChange={(e) => setRequireReviewBeforeMove(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 dark:border-slate-600 text-emerald-600 focus:ring-emerald-600"
+                />
+                <span className="space-y-0.5">
+                  <span className="block text-xs font-medium text-slate-800 dark:text-slate-200">
+                    Require &ldquo;Reviewed&rdquo; sign-off before moving tasks here
+                  </span>
+                  <span className="block text-[11px] text-slate-500 dark:text-slate-400">
+                    Blocks dragging, editing, or auto-moving unreviewed tasks into this column (enabled by default for Done columns).
+                  </span>
+                </span>
+              </label>
+            </div>
           </div>
 
           <div className="space-y-1.5 pt-2 border-t border-slate-200 dark:border-slate-800">
