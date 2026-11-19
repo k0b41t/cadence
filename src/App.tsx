@@ -6,6 +6,7 @@ import {
   CalendarDays,
   ChevronDown,
   Columns3,
+  Copy,
   Menu,
   MessageSquare,
   Plus,
@@ -250,6 +251,8 @@ function WorkspaceApp() {
   const [boardModalState, setBoardModalState] = useState<{
     mode: 'create' | 'edit';
     board?: Board;
+    createTab?: 'template' | 'clone' | 'import';
+    cloneSourceBoardId?: string;
   } | null>(null);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [allChatsOpen, setAllChatsOpen] = useState(false);
@@ -1331,6 +1334,24 @@ function WorkspaceApp() {
               </button>
             )}
 
+            {workspacePage !== 'admin' && activeBoard && (isAdmin || canCreateBoards) && (
+              <button
+                type="button"
+                onClick={() =>
+                  setBoardModalState({
+                    mode: 'create',
+                    createTab: 'clone',
+                    cloneSourceBoardId: activeBoard.id,
+                  })
+                }
+                aria-label="Clone board"
+                title="Clone this board"
+                className="p-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors shrink-0"
+              >
+                <Copy className="w-4 h-4" />
+              </button>
+            )}
+
             {workspacePage !== 'admin' && activeBoard && (isAdmin || activeBoard.ownerId === user.uid) && (
               <button
                 type="button"
@@ -1750,10 +1771,14 @@ function WorkspaceApp() {
       {/* Modals */}
       {boardModalState && (
         <BoardModal
+          key={`${boardModalState.mode}-${boardModalState.createTab ?? 'template'}-${boardModalState.cloneSourceBoardId ?? boardModalState.board?.id ?? 'new'}`}
           uid={user.uid}
           ownerDisplayName={profile?.displayName}
           mode={boardModalState.mode}
           board={boardModalState.board}
+          boards={orderedBoards}
+          initialCreateTab={boardModalState.createTab}
+          initialCloneSourceBoardId={boardModalState.cloneSourceBoardId ?? activeBoard?.id}
           isAdmin={isAdmin}
           canCreateBoards={isAdmin || canCreateBoards}
           columns={boardModalState.mode === 'edit' ? columns : undefined}
@@ -1762,6 +1787,13 @@ function WorkspaceApp() {
           messages={boardModalState.mode === 'edit' ? boardMessages : undefined}
           assigneeNames={boardModalState.mode === 'edit' ? assigneeNameMap : undefined}
           onCreated={handleSelectBoard}
+          onRequestClone={(sourceBoard) =>
+            setBoardModalState({
+              mode: 'create',
+              createTab: 'clone',
+              cloneSourceBoardId: sourceBoard.id,
+            })
+          }
           onDeleted={(deletedId) => {
             if (activeBoardId === deletedId) {
               const remaining = boards.filter((b) => b.id !== deletedId);

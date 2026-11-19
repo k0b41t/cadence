@@ -1227,6 +1227,289 @@ export async function importBoardFromParsed(
   return boardId;
 }
 
+export async function cloneBoard(
+  uid: string,
+  sourceBoard: Board,
+  options: {
+    title: string;
+    description: string;
+    includeTasks?: boolean;
+    resetProgress?: boolean;
+    ownerDisplayName?: string;
+  }
+): Promise<string> {
+  assertValidId(uid, 'userId');
+  assertValidId(sourceBoard.id, 'boardId');
+
+  const cleanTitle = sanitizeText(options.title, LIMITS.BOARD_TITLE_MAX);
+  if (!cleanTitle) throw new Error('Board name cannot be empty.');
+  const cleanDescription = sanitizeText(options.description, LIMITS.BOARD_DESC_MAX);
+  const cleanOwnerName = options.ownerDisplayName
+    ? sanitizeText(options.ownerDisplayName, LIMITS.USER_DISPLAY_NAME_MAX)
+    : '';
+  const includeTasks = options.includeTasks !== false;
+  const resetProgress = options.resetProgress !== false;
+
+  // 1. Read source columns
+  let sourceColumns: Column[] = [];
+  try {
+    const colSnaps = await getDocs(collection(db, 'boards', sourceBoard.id, 'columns'));
+    sourceColumns = colSnaps.docs
+      .map((d) => d.data() as Column)
+      .sort((a, b) => a.position - b.position);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, `boards/${sourceBoard.id}/columns`);
+  }
+
+  // 2. Optionally read source tasks & subtasks
+  let sourceTasks: Task[] = [];
+  const subtasksBySourceTask = new Map<string, Subtask[]>();
+
+  if (includeTasks) {
+    try {
+      const taskSnaps = await getDocs(collection(db, 'boards', sourceBoard.id, 'tasks'));
+      sourceTasks = taskSnaps.docs
+        .map((d) => d.data() as Task)
+        .sort((a, b) => a.position - b.position);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.LIST, `boards/${sourceBoard.id}/tasks`);
+    }
+
+    const READ_CONCURRENCY = 10;
+    for (let i = 0; i < sourceTasks.length; i += READ_CONCURRENCY) {
+      const slice = sourceTasks.slice(i, i + READ_CONCURRENCY);
+      await Promise.all(
+        slice.map(async (t) => {
+          try {
+            const subSnaps = await getDocs(
+              collection(db, 'boards', sourceBoard.id, 'tasks', t.id, 'subtasks')
+            );
+            const items = subSnaps.docs
+              .map((d) => d.data() as Subtask)
+              .sort((a, b) => a.position - b.position);
+            subtasksBySourceTask.set(t.id, items);
+          } catch (error) {
+            handleFirestoreError(
+              error,
+              OperationType.LIST,
+              `boards/${sourceBoard.id}/tasks/${t.id}/subtasks`
+            );
+          }
+        })
+      );
+    }
+  }
+
+  // 3. Create new board document
+  const newBoardId = generateId('brd');
+  const boardPayload: Record<string, unknown> = {
+    id: newBoardId,
+    ownerId: uid,
+    title: cleanTitle,
+    description: cleanDescription,
+    status: 'active',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (cleanOwnerName) {
+    boardPayload.ownerDisplayName = cleanOwnerName;
+  }
+
+  const rawBg = (sourceBoard.backgroundImageUrl ?? '').trim();
+  if (rawBg && rawBg.length <= LIMITS.BOARD_BG_URL_MAX && /^https?:\/\/[^\s]+$/i.test(rawBg)) {
+    boardPayload.backgroundImageUrl = rawBg;
+  }
+  if (typeof sourceBoard.surfaceOpacityEnabled === 'boolean') {
+    boardPayload.surfaceOpacityEnabled = sourceBoard.surfaceOpacityEnabled;
+  }
+  if (typeof sourceBoard.surfaceOpacity === 'number' && Number.isFinite(sourceBoard.surfaceOpacity)) {
+    boardPayload.surfaceOpacity = Math.round(Math.max(0, Math.min(100, sourceBoard.surfaceOpacity)));
+  }
+  if (Array.isArray(sourceBoard.customRoles) && sourceBoard.customRoles.length > 0) {
+    boardPayload.customRoles = sourceBoard.customRoles
+      .slice(0, LIMITS.BOARD_CUSTOM_ROLES_MAX)
+      .filter((cr) => Boolean(cr.id && ID_REGEX.test(cr.id) && sanitizeText(cr.name, LIMITS.CUSTOM_ROLE_NAME_MAX)))
+      .map((cr) => ({
+        id: cr.id,
+        name: sanitizeText(cr.name, LIMITS.CUSTOM_ROLE_NAME_MAX),
+        canCreateTasks: Boolean(cr.canCreateTasks),
+        canEditTasks: Boolean(cr.canEditTasks),
+        canDeleteTasks: Boolean(cr.canDeleteTasks),
+        canManageColumns: Boolean(cr.canManageColumns),
+      }));
+  }
+
+  try {
+    await setDoc(doc(db, 'boards', newBoardId), boardPayload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `boards/${newBoardId}`);
+  }
+
+  // 4. Create cloned columns (pre-mapping IDs so autoMoveTargetColumnId remaps cleanly)
+  const colIdMap = new Map<string, string>();
+  sourceColumns.forEach((col) => {
+    colIdMap.set(col.id, generateId('col'));
+  });
+
+  const BATCH_LIMIT = 400;
+  for (let start = 0; start < sourceColumns.length; start += BATCH_LIMIT) {
+    const chunk = sourceColumns.slice(start, start + BATCH_LIMIT);
+    const colBatch = writeBatch(db);
+    chunk.forEach((col, offset) => {
+      const newColId = colIdMap.get(col.id)!;
+      const idx = start + offset;
+      const colPayload: Record<string, unknown> = {
+        id: newColId,
+        boardId: newBoardId,
+        ownerId: uid,
+        createdBy: uid,
+        title: sanitizeText(col.title, LIMITS.COLUMN_TITLE_MAX) || `Column ${idx + 1}`,
+        position: clampPosition(col.position ?? (idx + 1) * 1000),
+        wipLimit: Math.max(0, Math.min(LIMITS.COLUMN_WIP_MAX, Math.floor(col.wipLimit || 0))),
+        colorRules: sanitizeColumnColorRules(col.colorRules),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      if (typeof col.autoMoveOnComplete === 'boolean') {
+        colPayload.autoMoveOnComplete = col.autoMoveOnComplete;
+      }
+      if (typeof col.autoMoveTargetColumnId === 'string') {
+        const mappedTarget = col.autoMoveTargetColumnId
+          ? colIdMap.get(col.autoMoveTargetColumnId) ?? ''
+          : '';
+        colPayload.autoMoveTargetColumnId = mappedTarget !== newColId ? mappedTarget : '';
+      }
+      if (typeof col.requireReviewBeforeMove === 'boolean') {
+        colPayload.requireReviewBeforeMove = col.requireReviewBeforeMove;
+      }
+      colBatch.set(doc(db, 'boards', newBoardId, 'columns', newColId), colPayload);
+    });
+
+    try {
+      await colBatch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `boards/${newBoardId}/columns`);
+    }
+  }
+
+  // 5. Create cloned tasks & subtasks
+  if (includeTasks && sourceTasks.length > 0) {
+    const today = getTodayDateKey();
+    const validTasks = sourceTasks.filter((t) => colIdMap.has(t.columnId));
+    const taskIdMap = new Map<string, string>();
+    validTasks.forEach((t) => {
+      taskIdMap.set(t.id, generateId('tsk'));
+    });
+
+    for (let start = 0; start < validTasks.length; start += BATCH_LIMIT) {
+      const chunk = validTasks.slice(start, start + BATCH_LIMIT);
+      const taskBatch = writeBatch(db);
+      chunk.forEach((t, offset) => {
+        const newTaskId = taskIdMap.get(t.id)!;
+        const newColId = colIdMap.get(t.columnId)!;
+        const cleanTaskTitle = sanitizeText(t.title, LIMITS.TASK_TITLE_MAX) || 'Untitled task';
+        const safeLinks = (() => {
+          try {
+            return sanitizeTaskLinks(t.links);
+          } catch {
+            return [];
+          }
+        })();
+        const isCompleted = resetProgress ? false : Boolean(t.completed);
+        const isReviewed = resetProgress ? false : Boolean(t.reviewed);
+        const taskPayload: Record<string, unknown> = {
+          id: newTaskId,
+          boardId: newBoardId,
+          columnId: newColId,
+          ownerId: uid,
+          createdBy: uid,
+          assigneeId: '',
+          reviewerId: '',
+          title: cleanTaskTitle,
+          description: sanitizeText(t.description ?? '', LIMITS.TASK_DESC_MAX),
+          priority: t.priority ?? 'medium',
+          position: clampPosition(t.position ?? (start + offset + 1) * 1000),
+          tags: sanitizeTags(t.tags ?? []),
+          dueDate: sanitizeDateKey(t.dueDate),
+          completed: isCompleted,
+          placedOnColumnAt: resetProgress
+            ? today
+            : sanitizeDateKey(t.placedOnColumnAt) || today,
+          completedAt: isCompleted
+            ? sanitizeDateKey(t.completedAt) || today
+            : '',
+          reviewed: isReviewed,
+          reviewedAt: isReviewed ? sanitizeDateKey(t.reviewedAt) || today : '',
+          reviewedBy: '',
+          links: safeLinks,
+          milestones: sanitizeTaskMilestones(t.milestones),
+          notificationsEnabled: t.notificationsEnabled !== false,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
+        taskBatch.set(doc(db, 'boards', newBoardId, 'tasks', newTaskId), taskPayload);
+      });
+
+      try {
+        await taskBatch.commit();
+      } catch (error) {
+        handleFirestoreError(error, OperationType.CREATE, `boards/${newBoardId}/tasks`);
+      }
+    }
+
+    const queuedSubtasks: Array<{
+      taskId: string;
+      subtaskId: string;
+      payload: Record<string, unknown>;
+    }> = [];
+
+    validTasks.forEach((t) => {
+      const newTaskId = taskIdMap.get(t.id);
+      if (!newTaskId) return;
+      const subs = subtasksBySourceTask.get(t.id) ?? [];
+      subs.forEach((sub, sIdx) => {
+        const cleanSubTitle = sanitizeText(sub.title, LIMITS.SUBTASK_TITLE_MAX);
+        if (!cleanSubTitle) return;
+        const subtaskId = generateId('sub');
+        queuedSubtasks.push({
+          taskId: newTaskId,
+          subtaskId,
+          payload: {
+            id: subtaskId,
+            boardId: newBoardId,
+            taskId: newTaskId,
+            ownerId: uid,
+            createdBy: uid,
+            title: cleanSubTitle,
+            completed: resetProgress ? false : Boolean(sub.completed),
+            position: clampPosition(sub.position ?? (sIdx + 1) * 1000),
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+        });
+      });
+    });
+
+    for (let start = 0; start < queuedSubtasks.length; start += BATCH_LIMIT) {
+      const chunk = queuedSubtasks.slice(start, start + BATCH_LIMIT);
+      const subBatch = writeBatch(db);
+      chunk.forEach((qs) => {
+        subBatch.set(
+          doc(db, 'boards', newBoardId, 'tasks', qs.taskId, 'subtasks', qs.subtaskId),
+          qs.payload
+        );
+      });
+      try {
+        await subBatch.commit();
+      } catch (error) {
+        handleFirestoreError(error, OperationType.CREATE, `boards/${newBoardId}/subtasks`);
+      }
+    }
+  }
+
+  return newBoardId;
+}
+
 export async function updateBoardDetails(
   boardId: string,
   title: string,

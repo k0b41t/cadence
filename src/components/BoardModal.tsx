@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { Archive, Download, FileUp, Image as ImageIcon, Trash2, Upload, X } from 'lucide-react';
+import { Archive, Copy, Download, FileUp, Image as ImageIcon, Trash2, Upload, X } from 'lucide-react';
 import { exportBoardToFile, type BoardExportFormat } from '../lib/boardExport';
 import { parseImportedBoardFile, type ParsedImportedBoard } from '../lib/boardImport';
 import {
   archiveBoard,
+  cloneBoard,
   createBoard,
   deleteBoard,
   importBoardFromParsed,
@@ -25,6 +26,9 @@ interface BoardModalProps {
   ownerDisplayName?: string;
   mode: 'create' | 'edit';
   board?: Board;
+  boards?: Board[];
+  initialCreateTab?: 'template' | 'clone' | 'import';
+  initialCloneSourceBoardId?: string;
   isAdmin: boolean;
   canCreateBoards: boolean;
   columns?: Column[];
@@ -34,6 +38,7 @@ interface BoardModalProps {
   assigneeNames?: Record<string, string>;
   onCreated: (boardId: string) => void;
   onDeleted: (deletedBoardId: string) => void;
+  onRequestClone?: (sourceBoard: Board) => void;
   onClose: () => void;
 }
 
@@ -53,11 +58,20 @@ const SOURCE_FORMAT_LABELS: Record<ParsedImportedBoard['sourceFormat'], string> 
   csv: 'CSV Spreadsheet',
 };
 
+function buildCloneDefaultTitle(sourceTitle: string): string {
+  const suffix = ' (Copy)';
+  const maxBaseLen = Math.max(1, LIMITS.BOARD_TITLE_MAX - suffix.length);
+  return `${sourceTitle.trim().slice(0, maxBaseLen)}${suffix}`;
+}
+
 export function BoardModal({
   uid,
   ownerDisplayName,
   mode,
   board,
+  boards = [],
+  initialCreateTab = 'template',
+  initialCloneSourceBoardId,
   isAdmin,
   canCreateBoards,
   columns = [],
@@ -67,13 +81,31 @@ export function BoardModal({
   assigneeNames = {},
   onCreated,
   onDeleted,
+  onRequestClone,
   onClose,
 }: BoardModalProps) {
-  const [createTab, setCreateTab] = useState<'template' | 'import'>('template');
-  const [title, setTitle] = useState(mode === 'edit' && board ? board.title : '');
-  const [description, setDescription] = useState(
-    mode === 'edit' && board ? board.description : ''
-  );
+  const initialCloneSource =
+    boards.find((b) => b.id === initialCloneSourceBoardId) ?? boards[0] ?? null;
+
+  const [createTab, setCreateTab] = useState<'template' | 'clone' | 'import'>(initialCreateTab);
+  const [cloneSourceId, setCloneSourceId] = useState<string>(initialCloneSource?.id ?? '');
+  const [cloneIncludeTasks, setCloneIncludeTasks] = useState(true);
+  const [cloneResetProgress, setCloneResetProgress] = useState(true);
+
+  const [title, setTitle] = useState(() => {
+    if (mode === 'edit' && board) return board.title;
+    if (mode === 'create' && initialCreateTab === 'clone' && initialCloneSource) {
+      return buildCloneDefaultTitle(initialCloneSource.title);
+    }
+    return '';
+  });
+  const [description, setDescription] = useState(() => {
+    if (mode === 'edit' && board) return board.description;
+    if (mode === 'create' && initialCreateTab === 'clone' && initialCloneSource) {
+      return initialCloneSource.description;
+    }
+    return '';
+  });
   const [backgroundImageUrl, setBackgroundImageUrl] = useState(
     mode === 'edit' && board ? (board.backgroundImageUrl ?? '') : ''
   );
@@ -140,6 +172,35 @@ export function BoardModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submitting || !canEditBoard) return;
+
+    if (mode === 'create' && createTab === 'clone') {
+      const source = boards.find((b) => b.id === cloneSourceId);
+      if (!source) {
+        setErrorMsg('Choose a source board to clone.');
+        return;
+      }
+      if (!title.trim()) {
+        setErrorMsg('Board name cannot be empty.');
+        return;
+      }
+      setSubmitting(true);
+      setErrorMsg(null);
+      try {
+        const newId = await cloneBoard(uid, source, {
+          title,
+          description,
+          includeTasks: cloneIncludeTasks,
+          resetProgress: cloneResetProgress,
+          ownerDisplayName,
+        });
+        onCreated(newId);
+        onClose();
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : 'Unable to clone Board.');
+        setSubmitting(false);
+      }
+      return;
+    }
 
     if (mode === 'create' && createTab === 'import') {
       if (!importedBoard) {
@@ -248,7 +309,13 @@ export function BoardModal({
       >
         <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
           <h2 id="board-modal-heading" className="font-display text-base font-semibold text-slate-900 dark:text-slate-100">
-            {mode === 'create' ? 'Create Board' : 'Board Settings'}
+            {mode === 'create'
+              ? createTab === 'clone'
+                ? 'Clone Board'
+                : createTab === 'import'
+                  ? 'Import Board'
+                  : 'Create Board'
+              : 'Board Settings'}
           </h2>
           <button
             type="button"
@@ -271,7 +338,7 @@ export function BoardModal({
             <div
               role="tablist"
               aria-label="Board creation mode"
-              className="grid grid-cols-2 gap-1 p-1 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
+              className="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
             >
               <button
                 type="button"
@@ -292,6 +359,29 @@ export function BoardModal({
               <button
                 type="button"
                 role="tab"
+                aria-selected={createTab === 'clone'}
+                onClick={() => {
+                  setCreateTab('clone');
+                  setErrorMsg(null);
+                  const src = boards.find((b) => b.id === cloneSourceId) ?? boards[0];
+                  if (src) {
+                    setCloneSourceId(src.id);
+                    setTitle(buildCloneDefaultTitle(src.title));
+                    setDescription(src.description);
+                  }
+                }}
+                className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                  createTab === 'clone'
+                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                }`}
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>Clone Board</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
                 aria-selected={createTab === 'import'}
                 onClick={() => {
                   setCreateTab('import');
@@ -304,8 +394,82 @@ export function BoardModal({
                 }`}
               >
                 <Upload className="w-3.5 h-3.5" />
-                <span>Import Board</span>
+                <span>Import</span>
               </button>
+            </div>
+          )}
+
+          {mode === 'create' && createTab === 'clone' && (
+            <div className="space-y-3">
+              {boards.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 p-4 text-xs text-slate-500 dark:text-slate-400 text-center">
+                  No accessible boards available to clone yet.
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-1.5">
+                    <label
+                      htmlFor="clone-source-board-select"
+                      className="block text-xs font-medium text-slate-600 dark:text-slate-400"
+                    >
+                      Source Board to Clone
+                    </label>
+                    <select
+                      id="clone-source-board-select"
+                      value={cloneSourceId}
+                      onChange={(e) => {
+                        const nextId = e.target.value;
+                        setCloneSourceId(nextId);
+                        const nextSrc = boards.find((b) => b.id === nextId);
+                        if (nextSrc) {
+                          setTitle(buildCloneDefaultTitle(nextSrc.title));
+                          setDescription(nextSrc.description);
+                        }
+                      }}
+                      className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    >
+                      {boards.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.title}
+                          {b.status === 'archived' ? ' (Archived)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 p-3.5 space-y-2.5">
+                    <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={cloneIncludeTasks}
+                        onChange={(e) => setCloneIncludeTasks(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-600"
+                      />
+                      <span className="text-xs font-medium text-slate-800 dark:text-slate-200">
+                        Include all tasks, notes, links, milestones &amp; checklists
+                      </span>
+                    </label>
+
+                    {cloneIncludeTasks && (
+                      <label className="flex items-start gap-2.5 pl-6 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={cloneResetProgress}
+                          onChange={(e) => setCloneResetProgress(e.target.checked)}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-600"
+                        />
+                        <span className="text-xs text-slate-700 dark:text-slate-300">
+                          Reset task completion, review sign-off &amp; checklist checkmarks
+                        </span>
+                      </label>
+                    )}
+
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Columns, WIP limits, color rules, and column automations are copied. Assignees, reviewers, board members, and chat logs start fresh.
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -365,7 +529,10 @@ export function BoardModal({
             </div>
           )}
 
-          {(mode === 'edit' || createTab === 'template' || importedBoard) && (
+          {(mode === 'edit' ||
+            createTab === 'template' ||
+            (createTab === 'clone' && boards.length > 0) ||
+            importedBoard) && (
             <>
               <div className="space-y-1.5">
                 <label htmlFor="board-title-input" className="block text-xs font-medium text-slate-600 dark:text-slate-400">
@@ -598,6 +765,18 @@ export function BoardModal({
                 )}
               </div>
 
+              {(isAdmin || canCreateBoards) && onRequestClone && (
+                <button
+                  type="button"
+                  onClick={() => onRequestClone(board)}
+                  disabled={submitting}
+                  className="w-full flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-medium text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/30 hover:bg-blue-100 dark:hover:bg-blue-950/50 border border-blue-200 dark:border-blue-900 rounded-lg transition-colors"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Clone Board</span>
+                </button>
+              )}
+
               {(isAdmin || board.ownerId === uid) && (
                 <>
                   {!isArchived && (
@@ -664,18 +843,23 @@ export function BoardModal({
                 disabled={
                   submitting ||
                   !title.trim() ||
-                  (mode === 'create' && createTab === 'import' && !importedBoard)
+                  (mode === 'create' && createTab === 'import' && !importedBoard) ||
+                  (mode === 'create' && createTab === 'clone' && !cloneSourceId)
                 }
                 className="px-4 py-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap"
               >
                 {submitting
                   ? mode === 'create' && createTab === 'import'
                     ? 'Importing...'
-                    : 'Saving...'
+                    : mode === 'create' && createTab === 'clone'
+                      ? 'Cloning...'
+                      : 'Saving...'
                   : mode === 'create'
                     ? createTab === 'import'
                       ? 'Import Board'
-                      : 'Create Board'
+                      : createTab === 'clone'
+                        ? 'Clone Board'
+                        : 'Create Board'
                     : 'Save changes'}
               </button>
             )}
