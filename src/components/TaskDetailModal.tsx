@@ -58,6 +58,7 @@ interface TaskDetailModalProps {
   canEditTasks: boolean;
   canDeleteTasks: boolean;
   initialFocusChat?: boolean;
+  onToggleSubtask?: (task: Task, subtask: Subtask, currentSubtasks: Subtask[]) => Promise<void> | void;
   onClose: () => void;
 }
 
@@ -75,6 +76,7 @@ export function TaskDetailModal({
   canEditTasks,
   canDeleteTasks,
   initialFocusChat = false,
+  onToggleSubtask,
   onClose,
 }: TaskDetailModalProps) {
   const [title, setTitle] = useState(task.title);
@@ -812,9 +814,13 @@ export function TaskDetailModal({
                     <button
                       type="button"
                       disabled={!canEditTasks}
-                      onClick={() =>
-                        toggleSubtaskCompleted(board.id, task.id, sub.id, !sub.completed)
-                      }
+                      onClick={() => {
+                        if (onToggleSubtask) {
+                          void onToggleSubtask(task, sub, subtasks);
+                        } else {
+                          void toggleSubtaskCompleted(board.id, task.id, sub.id, !sub.completed);
+                        }
+                      }}
                       className="flex items-center gap-2.5 text-left min-w-0 flex-1"
                     >
                       {sub.completed ? (

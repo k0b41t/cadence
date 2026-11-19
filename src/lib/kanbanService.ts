@@ -25,6 +25,7 @@ import {
   type AccessCode,
   type AdminRecord,
   type Board,
+  type BoardCode,
   type BoardCustomRole,
   type BoardInvite,
   type BoardMember,
@@ -1354,12 +1355,26 @@ export async function deleteBoard(boardId: string): Promise<void> {
     handleFirestoreError(error, OperationType.DELETE, `boards/${boardId}/columns`);
   }
 
-  // Delete all invites
+  // Delete all invites and clean up any mapped short board codes
   try {
     const inviteSnaps = await getDocs(collection(db, 'boards', boardId, 'invites'));
     if (!inviteSnaps.empty) {
+      const codeIds: string[] = [];
       const invBatch = writeBatch(db);
-      inviteSnaps.docs.forEach((i) => invBatch.delete(i.ref));
+      inviteSnaps.docs.forEach((i) => {
+        const invData = i.data() as BoardInvite;
+        if (
+          invData.joinCode &&
+          ID_REGEX.test(invData.joinCode) &&
+          invData.joinCode.length >= LIMITS.ACCESS_CODE_MIN
+        ) {
+          codeIds.push(invData.joinCode);
+        }
+        invBatch.delete(i.ref);
+      });
+      for (const codeId of codeIds) {
+        await deleteDoc(doc(db, 'boardCodes', codeId)).catch(() => {});
+      }
       await invBatch.commit();
     }
   } catch (error) {
@@ -1454,7 +1469,11 @@ export async function updateColumnDetails(
   columnId: string,
   title: string,
   wipLimit: number,
-  colorRules: ColumnColorRule[] = []
+  colorRules: ColumnColorRule[] = [],
+  automation?: {
+    autoMoveOnComplete: boolean;
+    autoMoveTargetColumnId: string;
+  }
 ): Promise<void> {
   assertValidId(boardId, 'boardId');
   assertValidId(columnId, 'columnId');
@@ -1463,14 +1482,27 @@ export async function updateColumnDetails(
   const cleanWip = Math.max(0, Math.min(LIMITS.COLUMN_WIP_MAX, Math.floor(wipLimit)));
   const cleanRules = sanitizeColumnColorRules(colorRules);
 
+  const payload: Record<string, unknown> = {
+    title: cleanTitle,
+    wipLimit: cleanWip,
+    colorRules: cleanRules,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (automation) {
+    const cleanTargetId = automation.autoMoveTargetColumnId.trim();
+    if (cleanTargetId && cleanTargetId !== columnId) {
+      assertValidId(cleanTargetId, 'targetColumnId');
+      payload.autoMoveTargetColumnId = cleanTargetId;
+    } else {
+      payload.autoMoveTargetColumnId = '';
+    }
+    payload.autoMoveOnComplete = Boolean(automation.autoMoveOnComplete);
+  }
+
   const path = `boards/${boardId}/columns/${columnId}`;
   try {
-    await updateDoc(doc(db, 'boards', boardId, 'columns', columnId), {
-      title: cleanTitle,
-      wipLimit: cleanWip,
-      colorRules: cleanRules,
-      updatedAt: serverTimestamp(),
-    });
+    await updateDoc(doc(db, 'boards', boardId, 'columns', columnId), payload);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -2296,10 +2328,42 @@ export async function createBoardInvite(
   label: string,
   role: BoardRole,
   permissions: BoardPermissions,
-  customRoleName?: string
-): Promise<string> {
+  customRoleName?: string,
+  customCode?: string
+): Promise<{ inviteId: string; joinCode: string }> {
   assertValidId(actorUid, 'userId');
   assertValidId(board.id, 'boardId');
+
+  const trimmedCustom = customCode?.trim() ?? '';
+  let joinCode = '';
+  if (trimmedCustom) {
+    joinCode = normalizeBoardCodeId(trimmedCustom);
+    try {
+      const existingSnap = await getDoc(doc(db, 'boardCodes', joinCode));
+      if (existingSnap.exists()) {
+        throw new Error(
+          `Board code "${joinCode}" already exists. Choose another code or leave blank to auto-generate.`
+        );
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('already exists')) {
+        throw error;
+      }
+      handleFirestoreError(error, OperationType.GET, `boardCodes/${joinCode}`);
+    }
+  } else {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const candidate = generateRandomBoardCode('BRD');
+      const snap = await getDoc(doc(db, 'boardCodes', candidate)).catch(() => null);
+      if (!snap || !snap.exists()) {
+        joinCode = candidate;
+        break;
+      }
+    }
+    if (!joinCode) {
+      joinCode = generateRandomBoardCode('BRD');
+    }
+  }
 
   const inviteId = generateId('inv');
   const cleanRoleName =
@@ -2309,10 +2373,12 @@ export async function createBoardInvite(
   const cleanBoardTitle = sanitizeText(board.title, LIMITS.BOARD_TITLE_MAX) || 'Shared Board';
   const path = `boards/${board.id}/invites/${inviteId}`;
   try {
-    await setDoc(doc(db, 'boards', board.id, 'invites', inviteId), {
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'boards', board.id, 'invites', inviteId), {
       id: inviteId,
       boardId: board.id,
       boardTitle: cleanBoardTitle,
+      joinCode,
       ownerId: board.ownerId,
       createdBy: actorUid,
       label: sanitizeText(label, LIMITS.INVITE_LABEL_MAX),
@@ -2326,13 +2392,27 @@ export async function createBoardInvite(
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+    batch.set(doc(db, 'boardCodes', joinCode), {
+      id: joinCode,
+      boardId: board.id,
+      inviteId,
+      ownerId: board.ownerId,
+      createdBy: actorUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
   }
-  return inviteId;
+  return { inviteId, joinCode };
 }
 
-export async function revokeBoardInvite(boardId: string, inviteId: string): Promise<void> {
+export async function revokeBoardInvite(
+  boardId: string,
+  inviteId: string,
+  joinCode?: string
+): Promise<void> {
   assertValidId(boardId, 'boardId');
   assertValidId(inviteId, 'inviteId');
   const path = `boards/${boardId}/invites/${inviteId}`;
@@ -2343,6 +2423,35 @@ export async function revokeBoardInvite(boardId: string, inviteId: string): Prom
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+  if (joinCode && ID_REGEX.test(joinCode) && joinCode.length >= LIMITS.ACCESS_CODE_MIN) {
+    await deleteDoc(doc(db, 'boardCodes', joinCode)).catch(() => {});
+  }
+}
+
+export async function resolveBoardCode(
+  rawCode: string
+): Promise<{ codeId: string; boardId: string; inviteId: string }> {
+  const codeId = normalizeBoardCodeId(rawCode);
+  const path = `boardCodes/${codeId}`;
+  try {
+    const snap = await getDoc(doc(db, 'boardCodes', codeId));
+    if (!snap.exists()) {
+      throw new Error(
+        'Board code not found or no longer active. Double-check the code with the board creator.'
+      );
+    }
+    const data = snap.data() as BoardCode;
+    return {
+      codeId,
+      boardId: data.boardId,
+      inviteId: data.inviteId,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('Board code not found')) {
+      throw error;
+    }
+    handleFirestoreError(error, OperationType.GET, path);
   }
 }
 
@@ -2667,6 +2776,20 @@ export function normalizeAccessCodeId(rawCode: string): string {
   return normalized;
 }
 
+export function normalizeBoardCodeId(rawCode: string): string {
+  const normalized = rawCode.trim().toUpperCase();
+  if (
+    normalized.length < LIMITS.ACCESS_CODE_MIN ||
+    normalized.length > LIMITS.ID_MAX ||
+    !ID_REGEX.test(normalized)
+  ) {
+    throw new Error(
+      `Board codes must be ${LIMITS.ACCESS_CODE_MIN}-${LIMITS.ID_MAX} characters using only letters, numbers, hyphens, or underscores.`
+    );
+  }
+  return normalized;
+}
+
 export function generateRandomAccessCode(prefix = 'CAD'): string {
   const randomBytes = new Uint8Array(6);
   crypto.getRandomValues(randomBytes);
@@ -2675,6 +2798,10 @@ export function generateRandomAccessCode(prefix = 'CAD'): string {
     suffix += ACCESS_CODE_ALPHABET[randomBytes[i] % ACCESS_CODE_ALPHABET.length];
   }
   return `${prefix}-${suffix}`;
+}
+
+export function generateRandomBoardCode(prefix = 'BRD'): string {
+  return generateRandomAccessCode(prefix);
 }
 
 export async function checkUserWhitelistAccess(

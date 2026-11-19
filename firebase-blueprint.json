@@ -505,6 +505,13 @@
           "minLength": 1,
           "maxLength": 80
         },
+        "joinCode": {
+          "type": "string",
+          "description": "Optional short uppercase join code mapped via /boardCodes/{codeId}.",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
         "ownerId": {
           "type": "string",
           "description": "UID of the parent board creator.",
@@ -580,6 +587,59 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "BoardCode": {
+      "title": "BoardCode",
+      "description": "Short uppercase join code mapping directly to a board and invite pass.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Short uppercase/alphanumeric board join code document ID.",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "boardId": {
+          "type": "string",
+          "description": "Target Kanban board ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "inviteId": {
+          "type": "string",
+          "description": "Target BoardInvite document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the parent board creator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "UID of the creator/admin who generated the board join code.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["id", "boardId", "inviteId", "ownerId", "createdBy", "createdAt", "updatedAt"]
     },
     "PendingBoardGrant": {
       "title": "PendingBoardGrant",
@@ -757,6 +817,16 @@
         "colorRules": {
           "type": "array",
           "description": "Up to 6 task-count threshold background color rules using preset tokens or #RRGGBB hex RGB strings."
+        },
+        "autoMoveOnComplete": {
+          "type": "boolean",
+          "description": "When true, completing all checklist subtasks on a task in this column automatically moves the task to the next or configured target column."
+        },
+        "autoMoveTargetColumnId": {
+          "type": "string",
+          "description": "Optional target column ID for checklist auto-move; empty string means move to the next column in board order.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]*$"
         },
         "createdAt": {
           "type": "string",
@@ -1054,6 +1124,10 @@
     "/accessCodes/{codeId}": {
       "schema": { "$ref": "#/entities/AccessCode" },
       "description": "Admin-generated workspace join codes redeemable to auto-add verified emails to /whitelist."
+    },
+    "/boardCodes/{codeId}": {
+      "schema": { "$ref": "#/entities/BoardCode" },
+      "description": "Short uppercase board join code lookup index mapping to a specific board and invite."
     },
     "/emailLookup/{emailHash}": {
       "schema": { "$ref": "#/entities/EmailLookup" },

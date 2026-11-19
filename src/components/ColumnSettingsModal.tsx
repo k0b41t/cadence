@@ -53,9 +53,19 @@ export function ColumnSettingsModal({
 
   const otherColumns = columns.filter((c) => c.id !== column.id);
   const [moveTargetId, setMoveTargetId] = useState<string>(otherColumns[0]?.id ?? '');
+  const [autoMoveOnComplete, setAutoMoveOnComplete] = useState<boolean>(
+    Boolean(column.autoMoveOnComplete)
+  );
+  const [autoMoveTargetColumnId, setAutoMoveTargetColumnId] = useState<string>(() =>
+    otherColumns.some((c) => c.id === column.autoMoveTargetColumnId)
+      ? (column.autoMoveTargetColumnId ?? '')
+      : ''
+  );
 
   const columnTasks = allTasks.filter((t) => t.columnId === column.id);
   const currentIndex = columns.findIndex((c) => c.id === column.id);
+  const nextColumn =
+    currentIndex >= 0 && currentIndex + 1 < columns.length ? columns[currentIndex + 1] : null;
   const parsedWipPreview = Math.max(0, Math.min(LIMITS.COLUMN_WIP_MAX, Number(wipLimit) || 0));
 
   useEffect(() => {
@@ -115,7 +125,10 @@ export function ColumnSettingsModal({
     setSubmitting(true);
     try {
       const parsedWip = Math.max(0, Math.min(LIMITS.COLUMN_WIP_MAX, Number(wipLimit) || 0));
-      await updateColumnDetails(boardId, column.id, title, parsedWip, colorRules);
+      await updateColumnDetails(boardId, column.id, title, parsedWip, colorRules, {
+        autoMoveOnComplete,
+        autoMoveTargetColumnId,
+      });
       onClose();
     } finally {
       setSubmitting(false);
@@ -339,6 +352,61 @@ export function ColumnSettingsModal({
                 <Plus className="w-3.5 h-3.5" />
                 <span>Add level rule</span>
               </button>
+            )}
+          </div>
+
+          {/* Checklist Automation */}
+          <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
+            <div>
+              <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Checklist Automation
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Optionally move cards forward when every subtask on their checklist is marked complete.
+              </p>
+            </div>
+
+            <label className="flex items-start gap-2.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoMoveOnComplete}
+                onChange={(e) => setAutoMoveOnComplete(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-600"
+              />
+              <span className="text-xs font-medium text-slate-800 dark:text-slate-200">
+                Auto-move tasks when all subtasks are checked
+              </span>
+            </label>
+
+            {autoMoveOnComplete && (
+              <div className="space-y-1.5 pl-6">
+                <label
+                  htmlFor="col-automove-target"
+                  className="block text-[11px] font-medium text-slate-600 dark:text-slate-400"
+                >
+                  Destination column
+                </label>
+                <select
+                  id="col-automove-target"
+                  value={autoMoveTargetColumnId}
+                  onChange={(e) => setAutoMoveTargetColumnId(e.target.value)}
+                  className="w-full px-3 py-1.5 text-xs bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                >
+                  <option value="">
+                    Next column ({nextColumn ? nextColumn.title : 'none after this column'})
+                  </option>
+                  {otherColumns.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      Specific column: {c.title}
+                    </option>
+                  ))}
+                </select>
+                {!autoMoveTargetColumnId && !nextColumn && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                    This is currently the last column. Tasks will auto-move only if another column is placed to the right or a specific column is selected.
+                  </p>
+                )}
+              </div>
             )}
           </div>
 

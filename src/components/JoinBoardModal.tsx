@@ -1,44 +1,66 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { User } from 'firebase/auth';
-import { AlertCircle, CheckCircle2, Link2, Shield, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, KeyRound, Shield, X } from 'lucide-react';
 import {
   getBoardInvitePreview,
   redeemBoardInvite,
+  resolveBoardCode,
   type BoardInvitePreview,
 } from '../lib/kanbanService';
-import { ROLE_PRESETS } from '../types/kanban';
+import { ID_REGEX, LIMITS, ROLE_PRESETS } from '../types/kanban';
 
 interface JoinBoardModalProps {
   user: User;
   initialBoardId?: string;
   initialInviteId?: string;
+  initialBoardCode?: string;
   initialError?: string | null;
   onJoined: (boardId: string) => void;
   onClose: () => void;
 }
 
-export function parseJoinInput(raw: string): { boardId: string; inviteId: string } | null {
+export type ParsedBoardJoinInput =
+  | { kind: 'ids'; boardId: string; inviteId: string }
+  | { kind: 'code'; code: string };
+
+export function parseJoinInput(raw: string): ParsedBoardJoinInput | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
   try {
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
       const url = new URL(trimmed);
-      const b = url.searchParams.get('join')?.trim();
-      const c = url.searchParams.get('code')?.trim();
-      if (b && c) return { boardId: b, inviteId: c };
+      const b = url.searchParams.get('join')?.trim() ?? '';
+      const c = url.searchParams.get('code')?.trim() ?? '';
+      if (b && c) return { kind: 'ids', boardId: b, inviteId: c };
       if (b && b.includes(':')) {
         const [boardId, inviteId] = b.split(':').map((s) => s.trim());
-        if (boardId && inviteId) return { boardId, inviteId };
+        if (boardId && inviteId) return { kind: 'ids', boardId, inviteId };
+      }
+      if (
+        b &&
+        b.length >= LIMITS.ACCESS_CODE_MIN &&
+        b.length <= LIMITS.ID_MAX &&
+        ID_REGEX.test(b)
+      ) {
+        return { kind: 'code', code: b.toUpperCase() };
       }
     }
   } catch {
-    // fall through to colon syntax
+    // fall through to colon / code syntax
   }
 
   if (trimmed.includes(':')) {
     const [boardId, inviteId] = trimmed.split(':').map((s) => s.trim());
-    if (boardId && inviteId) return { boardId, inviteId };
+    if (boardId && inviteId) return { kind: 'ids', boardId, inviteId };
+  }
+
+  if (
+    trimmed.length >= LIMITS.ACCESS_CODE_MIN &&
+    trimmed.length <= LIMITS.ID_MAX &&
+    ID_REGEX.test(trimmed)
+  ) {
+    return { kind: 'code', code: trimmed.toUpperCase() };
   }
 
   return null;
@@ -57,15 +79,18 @@ export function JoinBoardModal({
   user,
   initialBoardId = '',
   initialInviteId = '',
+  initialBoardCode = '',
   initialError = null,
   onJoined,
   onClose,
 }: JoinBoardModalProps) {
-  const [rawCode, setRawCode] = useState(
-    initialBoardId && initialInviteId && typeof window !== 'undefined'
-      ? `${window.location.origin}${window.location.pathname}?join=${encodeURIComponent(initialBoardId)}&code=${encodeURIComponent(initialInviteId)}`
-      : ''
-  );
+  const [rawCode, setRawCode] = useState(() => {
+    if (initialBoardCode) return initialBoardCode.toUpperCase();
+    if (initialBoardId && initialInviteId && typeof window !== 'undefined') {
+      return `${window.location.origin}${window.location.pathname}?join=${encodeURIComponent(initialBoardId)}&code=${encodeURIComponent(initialInviteId)}`;
+    }
+    return '';
+  });
   const [joining, setJoining] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(initialError);
   const [preview, setPreview] = useState<BoardInvitePreview | null>(null);
@@ -91,7 +116,14 @@ export function JoinBoardModal({
     let cancelled = false;
     setLoadingPreview(true);
     const timer = window.setTimeout(() => {
-      void getBoardInvitePreview(parsedInput.boardId, parsedInput.inviteId)
+      const fetchPreview =
+        parsedInput.kind === 'ids'
+          ? getBoardInvitePreview(parsedInput.boardId, parsedInput.inviteId)
+          : resolveBoardCode(parsedInput.code).then(({ boardId, inviteId }) =>
+              getBoardInvitePreview(boardId, inviteId)
+            );
+
+      void fetchPreview
         .then((res) => {
           if (!cancelled) {
             setPreview(res);
@@ -107,7 +139,7 @@ export function JoinBoardModal({
             setLoadingPreview(false);
           }
         });
-    }, 150);
+    }, 180);
 
     return () => {
       cancelled = true;
@@ -120,14 +152,18 @@ export function JoinBoardModal({
     if (joining) return;
 
     if (!parsedInput) {
-      setErrorMsg('Paste a valid board invite link or boardId:inviteId code.');
+      setErrorMsg('Enter a valid Board Code (e.g. BRD-8K2M9P) or paste a board invite link.');
       return;
     }
 
     setJoining(true);
     setErrorMsg(null);
     try {
-      const res = await redeemBoardInvite(user, parsedInput.boardId, parsedInput.inviteId);
+      const target =
+        parsedInput.kind === 'ids'
+          ? { boardId: parsedInput.boardId, inviteId: parsedInput.inviteId }
+          : await resolveBoardCode(parsedInput.code);
+      const res = await redeemBoardInvite(user, target.boardId, target.inviteId);
       onJoined(res.boardId);
       onClose();
     } catch (err) {
@@ -152,7 +188,7 @@ export function JoinBoardModal({
       >
         <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Link2 className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            <KeyRound className="w-4 h-4 text-blue-600 dark:text-blue-400" />
             <h2
               id="join-board-heading"
               className="font-display text-base font-semibold text-slate-900 dark:text-slate-100"
@@ -185,7 +221,7 @@ export function JoinBoardModal({
               htmlFor="join-code-input"
               className="block text-xs font-medium text-slate-600 dark:text-slate-400"
             >
-              Board Invite Link
+              Board Code or Invite Link
             </label>
             <input
               id="join-code-input"
@@ -197,14 +233,17 @@ export function JoinBoardModal({
                 setRawCode(e.target.value);
                 if (errorMsg) setErrorMsg(null);
               }}
-              placeholder="Paste shared board invite link"
+              placeholder="e.g. BRD-8K2M9P or paste join link"
               className="w-full px-3.5 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
             />
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Enter a short board code from the board creator or paste the full join URL.
+            </p>
           </div>
 
           {parsedInput && loadingPreview && (
             <div className="text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-lg px-3.5 py-2.5">
-              Checking invite details...
+              Checking board invite details...
             </div>
           )}
 
@@ -237,7 +276,7 @@ export function JoinBoardModal({
                 <span>
                   {preview.active
                     ? summarizeInvitePermissions(preview)
-                    : 'This invite link has been revoked by the board creator.'}
+                    : 'This board invite has been revoked by the board creator.'}
                 </span>
               </div>
             </div>

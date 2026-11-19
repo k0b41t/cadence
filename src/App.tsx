@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import {
+  ArrowRight,
   Bell,
   CalendarDays,
   ChevronDown,
@@ -11,6 +12,7 @@ import {
   Search,
   Settings,
   SlidersHorizontal,
+  Undo2,
   Users,
   X,
 } from 'lucide-react';
@@ -56,6 +58,7 @@ import {
   moveTask,
   redeemAccessCode,
   redeemBoardInvite,
+  resolveBoardCode,
   subscribeAccessibleBoards,
   subscribeAllBoardsMessages,
   subscribeAllBoardsTasks,
@@ -74,11 +77,13 @@ import {
   updateUserTheme,
 } from './lib/kanbanService';
 import {
+  ID_REGEX,
   LIMITS,
   resolveRoleFromPermissions,
   type Board,
   type BoardMember,
   type Column,
+  type PendingBoardJoinTarget,
   type Priority,
   type Subtask,
   type Task,
@@ -103,13 +108,29 @@ function computeInsertPosition(sortedTasks: Task[], insertIndex: number): number
 const PENDING_ACCESS_STORAGE_KEY = 'cadence_pending_access';
 const PENDING_JOIN_STORAGE_KEY = 'cadence_pending_join';
 
-function readStoredPendingJoin(): { boardId: string; inviteId: string } | null {
+function readStoredPendingJoin(): PendingBoardJoinTarget | null {
   if (typeof window === 'undefined') return null;
   const raw = window.sessionStorage.getItem(PENDING_JOIN_STORAGE_KEY);
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as { boardId?: unknown; inviteId?: unknown };
-    if (typeof parsed.boardId === 'string' && typeof parsed.inviteId === 'string' && parsed.boardId && parsed.inviteId) {
+    const parsed = JSON.parse(raw) as {
+      boardId?: unknown;
+      inviteId?: unknown;
+      boardCode?: unknown;
+    };
+    if (
+      typeof parsed.boardCode === 'string' &&
+      parsed.boardCode.trim().length >= LIMITS.ACCESS_CODE_MIN &&
+      ID_REGEX.test(parsed.boardCode.trim())
+    ) {
+      return { boardCode: parsed.boardCode.trim().toUpperCase() };
+    }
+    if (
+      typeof parsed.boardId === 'string' &&
+      typeof parsed.inviteId === 'string' &&
+      parsed.boardId &&
+      parsed.inviteId
+    ) {
       return { boardId: parsed.boardId, inviteId: parsed.inviteId };
     }
   } catch {
@@ -120,7 +141,7 @@ function readStoredPendingJoin(): { boardId: string; inviteId: string } | null {
 
 function readInitialInviteParams(): {
   accessCode: string | null;
-  boardInvite: { boardId: string; inviteId: string } | null;
+  boardInvite: PendingBoardJoinTarget | null;
 } {
   if (typeof window === 'undefined') {
     return { accessCode: null, boardInvite: null };
@@ -138,12 +159,19 @@ function readInitialInviteParams(): {
 
   const rawJoin = params.get('join')?.trim() ?? '';
   const rawCode = params.get('code')?.trim() ?? '';
-  let parsedBoardInvite: { boardId: string; inviteId: string } | null = null;
+  let parsedBoardInvite: PendingBoardJoinTarget | null = null;
   if (rawJoin && rawCode) {
     parsedBoardInvite = { boardId: rawJoin, inviteId: rawCode };
   } else if (rawJoin && rawJoin.includes(':')) {
     const [b, c] = rawJoin.split(':').map((s) => s.trim());
     if (b && c) parsedBoardInvite = { boardId: b, inviteId: c };
+  } else if (
+    rawJoin &&
+    rawJoin.length >= LIMITS.ACCESS_CODE_MIN &&
+    rawJoin.length <= LIMITS.ID_MAX &&
+    ID_REGEX.test(rawJoin)
+  ) {
+    parsedBoardInvite = { boardCode: rawJoin.toUpperCase() };
   }
   if (parsedBoardInvite) {
     window.sessionStorage.setItem(PENDING_JOIN_STORAGE_KEY, JSON.stringify(parsedBoardInvite));
@@ -177,10 +205,8 @@ function WorkspaceApp() {
   const [accessSuspended, setAccessSuspended] = useState(false);
   const [accessGateError, setAccessGateError] = useState<string | null>(null);
   const [pendingAccessCode, setPendingAccessCode] = useState<string | null>(initialInvites.accessCode);
-  const [pendingBoardInvite, setPendingBoardInvite] = useState<{
-    boardId: string;
-    inviteId: string;
-  } | null>(initialInvites.boardInvite);
+  const [pendingBoardInvite, setPendingBoardInvite] =
+    useState<PendingBoardJoinTarget | null>(initialInvites.boardInvite);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [workspacePage, setWorkspacePage] = useState<'workspace' | 'admin'>('workspace');
   const [asyncError, setAsyncError] = useState<Error | null>(null);
@@ -231,6 +257,7 @@ function WorkspaceApp() {
   const [joinModalState, setJoinModalState] = useState<{
     boardId?: string;
     inviteId?: string;
+    boardCode?: string;
     initialError?: string;
   } | null>(null);
   const [createTaskOpen, setCreateTaskOpen] = useState(false);
@@ -251,6 +278,27 @@ function WorkspaceApp() {
   // Drag state
   const [draggedTask, setDraggedTask] = useState<Task | null>(null);
   const [dropTarget, setDropTarget] = useState<{ columnId: string; index: number } | null>(null);
+
+  // Checklist auto-move undo toast
+  const [autoMoveToast, setAutoMoveToast] = useState<{
+    id: string;
+    boardId: string;
+    taskId: string;
+    taskTitle: string;
+    fromColumnId: string;
+    fromColumnTitle: string;
+    fromPosition: number;
+    toColumnId: string;
+    toColumnTitle: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!autoMoveToast) return;
+    const timer = window.setTimeout(() => {
+      setAutoMoveToast(null);
+    }, 7000);
+    return () => window.clearTimeout(timer);
+  }, [autoMoveToast]);
 
   // Sync theme, active mode color palette & fonts to <html>
   useEffect(() => {
@@ -289,7 +337,7 @@ function WorkspaceApp() {
   const verifyAndProvisionUser = async (
     nextUser: User,
     autoRedeemCode: string | null,
-    autoJoinInvite: { boardId: string; inviteId: string } | null
+    autoJoinInvite: PendingBoardJoinTarget | null
   ) => {
     setAccessStatus('checking');
     setAccessSuspended(false);
@@ -298,6 +346,27 @@ function WorkspaceApp() {
 
     const adminStatus = await checkIsAdmin(nextUser);
     let wlStatus = await checkUserWhitelistAccess(nextUser, adminStatus.isAdmin);
+
+    let resolvedAutoJoin: { boardId: string; inviteId: string } | null = null;
+    let autoJoinResolutionError: string | null = null;
+    if (autoJoinInvite) {
+      if (autoJoinInvite.boardId && autoJoinInvite.inviteId) {
+        resolvedAutoJoin = {
+          boardId: autoJoinInvite.boardId,
+          inviteId: autoJoinInvite.inviteId,
+        };
+      } else if (autoJoinInvite.boardCode) {
+        try {
+          const mapped = await resolveBoardCode(autoJoinInvite.boardCode);
+          resolvedAutoJoin = { boardId: mapped.boardId, inviteId: mapped.inviteId };
+        } catch (resolveErr) {
+          autoJoinResolutionError =
+            resolveErr instanceof Error
+              ? resolveErr.message
+              : 'Board invite code is invalid or no longer active.';
+        }
+      }
+    }
 
     if (!wlStatus.allowed && !wlStatus.suspended && autoRedeemCode) {
       try {
@@ -321,24 +390,30 @@ function WorkspaceApp() {
     }
 
     if (!wlStatus.allowed && !wlStatus.suspended && autoJoinInvite) {
-      try {
-        const onboarded = await tryWhitelistFromBoardInvite(
-          nextUser,
-          autoJoinInvite.boardId,
-          autoJoinInvite.inviteId
-        );
-        wlStatus = {
-          allowed: true,
-          suspended: false,
-          canCreateBoards: onboarded.canCreateBoards,
-          email: onboarded.email,
-        };
-      } catch (inviteErr) {
+      if (resolvedAutoJoin) {
+        try {
+          const onboarded = await tryWhitelistFromBoardInvite(
+            nextUser,
+            resolvedAutoJoin.boardId,
+            resolvedAutoJoin.inviteId
+          );
+          wlStatus = {
+            allowed: true,
+            suspended: false,
+            canCreateBoards: onboarded.canCreateBoards,
+            email: onboarded.email,
+          };
+        } catch (inviteErr) {
+          window.sessionStorage.removeItem(PENDING_JOIN_STORAGE_KEY);
+          setPendingBoardInvite(null);
+          setAccessGateError(
+            inviteErr instanceof Error ? inviteErr.message : 'Unable to join via board invite link.'
+          );
+        }
+      } else if (autoJoinResolutionError) {
         window.sessionStorage.removeItem(PENDING_JOIN_STORAGE_KEY);
         setPendingBoardInvite(null);
-        setAccessGateError(
-          inviteErr instanceof Error ? inviteErr.message : 'Unable to join via board invite link.'
-        );
+        setAccessGateError(autoJoinResolutionError);
       }
     }
 
@@ -360,26 +435,36 @@ function WorkspaceApp() {
 
     let targetBoardId = ensured.activeBoardId || '';
 
-    // Auto-redeem any pending ?join= board invite link directly into the board
+    // Auto-redeem any pending ?join= board code or invite link directly into the board
     if (autoJoinInvite) {
-      try {
-        const res = await redeemBoardInvite(
-          nextUser,
-          autoJoinInvite.boardId,
-          autoJoinInvite.inviteId
-        );
-        targetBoardId = res.boardId;
-        await updateUserActiveBoard(nextUser.uid, res.boardId).catch(() => {});
-      } catch (joinErr) {
-        setJoinModalState({
-          boardId: autoJoinInvite.boardId,
-          inviteId: autoJoinInvite.inviteId,
-          initialError:
-            joinErr instanceof Error ? joinErr.message : 'Unable to join shared board.',
-        });
-      } finally {
+      if (resolvedAutoJoin) {
+        try {
+          const res = await redeemBoardInvite(
+            nextUser,
+            resolvedAutoJoin.boardId,
+            resolvedAutoJoin.inviteId
+          );
+          targetBoardId = res.boardId;
+          await updateUserActiveBoard(nextUser.uid, res.boardId).catch(() => {});
+        } catch (joinErr) {
+          setJoinModalState({
+            boardId: resolvedAutoJoin.boardId,
+            inviteId: resolvedAutoJoin.inviteId,
+            boardCode: autoJoinInvite.boardCode,
+            initialError:
+              joinErr instanceof Error ? joinErr.message : 'Unable to join shared board.',
+          });
+        } finally {
+          window.sessionStorage.removeItem(PENDING_JOIN_STORAGE_KEY);
+          setPendingBoardInvite(null);
+        }
+      } else if (autoJoinResolutionError) {
         window.sessionStorage.removeItem(PENDING_JOIN_STORAGE_KEY);
         setPendingBoardInvite(null);
+        setJoinModalState({
+          boardCode: autoJoinInvite.boardCode,
+          initialError: autoJoinResolutionError,
+        });
       }
     }
 
@@ -920,6 +1005,65 @@ function WorkspaceApp() {
     );
   };
 
+  const handleToggleSubtask = async (
+    task: Task,
+    subtask: Subtask,
+    currentSubtasksOverride?: Subtask[]
+  ) => {
+    if (!activeBoard || !effectivePermissions.canEditTasks) return;
+    const boardId = activeBoard.id;
+    const nextCompleted = !subtask.completed;
+    await toggleSubtaskCompleted(boardId, task.id, subtask.id, nextCompleted);
+
+    if (!nextCompleted) return;
+
+    const taskSubtasks = currentSubtasksOverride ?? subtasksByTask[task.id] ?? [];
+    if (taskSubtasks.length === 0) return;
+    const allComplete = taskSubtasks.every((s) =>
+      s.id === subtask.id ? true : s.completed
+    );
+    if (!allComplete) return;
+
+    const sourceIndex = columns.findIndex((c) => c.id === task.columnId);
+    if (sourceIndex === -1) return;
+    const sourceColumn = columns[sourceIndex];
+    if (!sourceColumn?.autoMoveOnComplete) return;
+
+    const targetColumn = sourceColumn.autoMoveTargetColumnId
+      ? columns.find(
+          (c) => c.id === sourceColumn.autoMoveTargetColumnId && c.id !== sourceColumn.id
+        )
+      : columns[sourceIndex + 1];
+    if (!targetColumn) return;
+
+    const targetColTasks = tasks.filter(
+      (t) => t.columnId === targetColumn.id && t.id !== task.id
+    );
+    const maxPos = targetColTasks.reduce((m, t) => Math.max(m, t.position), 0);
+    const nextPos = Math.min(LIMITS.POSITION_MAX, maxPos + 1000);
+
+    await moveTask(boardId, task.id, targetColumn.id, nextPos, true);
+
+    setAutoMoveToast({
+      id: `${task.id}-${Date.now()}`,
+      boardId,
+      taskId: task.id,
+      taskTitle: task.title,
+      fromColumnId: sourceColumn.id,
+      fromColumnTitle: sourceColumn.title,
+      fromPosition: task.position,
+      toColumnId: targetColumn.id,
+      toColumnTitle: targetColumn.title,
+    });
+  };
+
+  const handleUndoAutoMove = async () => {
+    if (!autoMoveToast) return;
+    const toast = autoMoveToast;
+    setAutoMoveToast(null);
+    await moveTask(toast.boardId, toast.taskId, toast.fromColumnId, toast.fromPosition, true);
+  };
+
   const themeModal = themeSettingsOpen ? (
     <ThemeSettingsModal
       activeTheme={theme}
@@ -1412,8 +1556,8 @@ function WorkspaceApp() {
                 </h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">
                   {isAdmin || canCreateBoards
-                    ? "Create a new board or join a teammate's shared board with an invite link."
-                    : "Join a teammate's shared board with an invite link, or ask an administrator for permission to create boards."}
+                    ? "Create a new board or join a teammate's shared board with a board code or link."
+                    : "Join a teammate's shared board with a board code or link, or ask an administrator for permission to create boards."}
                 </p>
                 <div className="flex items-center justify-center gap-3 pt-1">
                   {(isAdmin || canCreateBoards) && (
@@ -1484,9 +1628,7 @@ function WorkspaceApp() {
                     onToggleTaskComplete={(task) =>
                       toggleTaskCompleted(activeBoard.id, task.id, !task.completed)
                     }
-                    onToggleSubtask={(task, sub) =>
-                      toggleSubtaskCompleted(activeBoard.id, task.id, sub.id, !sub.completed)
-                    }
+                    onToggleSubtask={(task, sub) => void handleToggleSubtask(task, sub)}
                     onQuickCreateTask={handleQuickCreateTask}
                     onOpenColumnSettings={(column) => setEditingColumnId(column.id)}
                   />
@@ -1623,6 +1765,7 @@ function WorkspaceApp() {
           user={user}
           initialBoardId={joinModalState.boardId}
           initialInviteId={joinModalState.inviteId}
+          initialBoardCode={joinModalState.boardCode}
           initialError={joinModalState.initialError}
           onJoined={handleSelectBoard}
           onClose={() => setJoinModalState(null)}
@@ -1662,6 +1805,7 @@ function WorkspaceApp() {
           canEditTasks={effectivePermissions.canEditTasks}
           canDeleteTasks={effectivePermissions.canDeleteTasks}
           initialFocusChat={taskModalFocusChat}
+          onToggleSubtask={handleToggleSubtask}
           onClose={() => {
             setSelectedTaskId(null);
             setTaskModalFocusChat(false);
@@ -1677,6 +1821,45 @@ function WorkspaceApp() {
           allTasks={tasks}
           onClose={() => setEditingColumnId(null)}
         />
+      )}
+
+      {autoMoveToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-5 left-4 right-4 sm:left-auto sm:right-5 z-[60] sm:max-w-md bg-slate-900 dark:bg-slate-100 text-slate-100 dark:text-slate-900 border border-slate-700 dark:border-slate-300 rounded-xl shadow-lg px-4 py-3 flex items-center justify-between gap-3"
+        >
+          <div className="min-w-0 flex-1 text-xs">
+            <p className="font-medium truncate">
+              Moved &ldquo;{autoMoveToast.taskTitle}&rdquo;
+            </p>
+            <p className="text-slate-300 dark:text-slate-600 flex items-center gap-1 truncate mt-0.5">
+              <span className="truncate">{autoMoveToast.fromColumnTitle}</span>
+              <ArrowRight className="w-3 h-3 shrink-0" />
+              <span className="font-medium text-white dark:text-slate-950 truncate">
+                {autoMoveToast.toColumnTitle}
+              </span>
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => void handleUndoAutoMove()}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors whitespace-nowrap"
+            >
+              <Undo2 className="w-3.5 h-3.5" />
+              <span>Undo</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setAutoMoveToast(null)}
+              aria-label="Dismiss notification"
+              className="p-1 text-slate-400 hover:text-white dark:text-slate-500 dark:hover:text-slate-900 rounded-md transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
       )}
 
       {themeModal}

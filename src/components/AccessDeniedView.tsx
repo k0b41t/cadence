@@ -12,14 +12,14 @@ import {
   Sun,
 } from 'lucide-react';
 import { redeemAccessCode } from '../lib/kanbanService';
-import type { ThemeMode } from '../types/kanban';
+import type { PendingBoardJoinTarget, ThemeMode } from '../types/kanban';
 import { DocsModal } from './DocsModal';
 
 interface AccessDeniedViewProps {
   user: User;
   suspended: boolean;
   initialAccessCode?: string | null;
-  pendingBoardInvite?: { boardId: string; inviteId: string } | null;
+  pendingBoardInvite?: PendingBoardJoinTarget | null;
   initialError?: string | null;
   theme: ThemeMode;
   onToggleTheme: () => void;

@@ -2,13 +2,13 @@ import { useState } from 'react';
 import { signInWithPopup } from 'firebase/auth';
 import { ArrowRight, BookOpen, CheckSquare, Cog, Columns3, Moon, Sun } from 'lucide-react';
 import { auth, googleProvider } from '../lib/firebase';
-import type { ThemeMode } from '../types/kanban';
+import type { PendingBoardJoinTarget, ThemeMode } from '../types/kanban';
 import { DocsModal } from './DocsModal';
 
 interface SignInViewProps {
   theme: ThemeMode;
   pendingAccessCode?: string | null;
-  pendingBoardInvite?: { boardId: string; inviteId: string } | null;
+  pendingBoardInvite?: PendingBoardJoinTarget | null;
   onToggleTheme: () => void;
   onOpenThemeSettings: () => void;
 }

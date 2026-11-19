@@ -1,5 +1,5 @@
 import { useState, type CSSProperties, type DragEvent } from 'react';
-import { Plus, Settings2 } from 'lucide-react';
+import { ArrowRightCircle, Plus, Settings2 } from 'lucide-react';
 import { isPresetColumnColor, parseColumnColorToRgb } from '../lib/colorUtils';
 import { LIMITS, type Column, type PresetColumnBgColor, type Subtask, type Task } from '../types/kanban';
 import { TaskCard } from './TaskCard';
@@ -203,6 +203,14 @@ export function KanbanColumn({
           >
             {column.wipLimit > 0 ? `${tasks.length}/${column.wipLimit}` : `${tasks.length}`}
           </span>
+          {column.autoMoveOnComplete && (
+            <span
+              title="Auto-moves tasks when all checklist items are checked"
+              className="inline-flex items-center text-blue-600/80 dark:text-blue-400/80 shrink-0"
+            >
+              <ArrowRightCircle className="w-3.5 h-3.5" />
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">

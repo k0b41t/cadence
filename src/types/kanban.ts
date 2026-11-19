@@ -347,6 +347,7 @@ export interface BoardInvite {
   id: string;
   boardId: string;
   boardTitle?: string;
+  joinCode?: string;
   ownerId: string;
   createdBy: string;
   label: string;
@@ -359,6 +360,22 @@ export interface BoardInvite {
   active: boolean;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
+}
+
+export interface BoardCode {
+  id: string;
+  boardId: string;
+  inviteId: string;
+  ownerId: string;
+  createdBy: string;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface PendingBoardJoinTarget {
+  boardId?: string;
+  inviteId?: string;
+  boardCode?: string;
 }
 
 export interface PendingBoardGrant {
@@ -399,6 +416,8 @@ export interface Column {
   position: number;
   wipLimit: number;
   colorRules?: ColumnColorRule[];
+  autoMoveOnComplete?: boolean;
+  autoMoveTargetColumnId?: string;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }
