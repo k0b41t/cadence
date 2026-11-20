@@ -446,18 +446,24 @@ async function runTests() {
   await assertSucceeds(
     updateDoc(doc(dbCreator, 'boards', 'board_1', 'tasks', 'task_1'), {
       assigneeId: MEMBER_CONTRIB.uid,
-      title: 'Existing Task',
-      description: '',
-      priority: 'medium',
-      tags: [],
-      dueDate: '',
-      completed: false,
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(
+    updateDoc(doc(dbCreator, 'boards', 'board_1', 'tasks', 'task_1'), {
+      reviewerId: MEMBER_MANAGER.uid,
       updatedAt: serverTimestamp(),
     })
   );
   await assertSucceeds(
     updateDoc(doc(dbManager, 'boards', 'board_1', 'tasks', 'task_1'), {
-      reviewerId: MEMBER_MANAGER.uid,
+      assigneeId: MEMBER_MANAGER.uid,
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(
+    updateDoc(doc(dbManager, 'boards', 'board_1', 'tasks', 'task_1'), {
+      reviewerId: CREATOR.uid,
       updatedAt: serverTimestamp(),
     })
   );

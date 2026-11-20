@@ -68,6 +68,36 @@ interface TaskDetailModalProps {
   onClose: () => void;
 }
 
+function formatTaskMutationError(err: unknown, fallback: string): string {
+  if (!(err instanceof Error) || !err.message) return fallback;
+  const raw = err.message.trim();
+  if (raw.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(raw) as { error?: string };
+      const inner = (parsed.error || '').toLowerCase();
+      if (inner.includes('permission') || inner.includes('insufficient')) {
+        return 'Permission denied — ensure this board is active, you have "Add assignee / reviewer" access, and the selected person is a board member.';
+      }
+      if (parsed.error) return parsed.error;
+    } catch {
+      // fall through to raw message
+    }
+  }
+  const lower = raw.toLowerCase();
+  if (lower.includes('permission') || lower.includes('insufficient')) {
+    return 'Permission denied — ensure this board is active, you have "Add assignee / reviewer" access, and the selected person is a board member.';
+  }
+  return raw;
+}
+
+function serializeForSync(value: unknown): string {
+  try {
+    return JSON.stringify(value ?? null);
+  } catch {
+    return '';
+  }
+}
+
 export function TaskDetailModal({
   uid,
   senderName,
@@ -121,6 +151,8 @@ export function TaskDetailModal({
   const [reviewedBy, setReviewedBy] = useState(task.reviewedBy ?? '');
   const [savingAssignee, setSavingAssignee] = useState(false);
   const [savingReview, setSavingReview] = useState(false);
+  const [assigneeError, setAssigneeError] = useState<string | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -128,6 +160,7 @@ export function TaskDetailModal({
   const chatSectionRef = useRef<HTMLDivElement | null>(null);
   const chatInputRef = useRef<HTMLInputElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const lastSyncedTaskRef = useRef<Task>(task);
 
   const taskMessages = useMemo(
     () => messages.filter((m) => m.taskId === task.id),
@@ -137,24 +170,83 @@ export function TaskDetailModal({
   const canPostChat = isAdmin || board.status === 'active';
 
   useEffect(() => {
-    setTitle(task.title);
-    setDescription(task.description);
-    setPriority(task.priority);
-    setDueDate(task.dueDate);
-    setPlacedOnColumnAt(task.placedOnColumnAt ?? '');
-    setCompleted(task.completed);
-    setCompletedAt(task.completedAt ?? '');
-    setColumnId(task.columnId);
-    setAssigneeId(task.assigneeId ?? '');
-    setNotificationsEnabled(task.notificationsEnabled !== false);
-    setTags(task.tags);
-    setLinks(task.links ?? []);
-    setMilestones(task.milestones ?? []);
-    setReviewerId(task.reviewerId ?? '');
-    setReviewed(Boolean(task.reviewed));
-    setReviewedAt(task.reviewedAt ?? '');
-    setReviewedBy(task.reviewedBy ?? '');
-  }, [task]);
+    const prev = lastSyncedTaskRef.current;
+    if (prev.id !== task.id) {
+      setTitle(task.title);
+      setDescription(task.description);
+      setPriority(task.priority);
+      setDueDate(task.dueDate);
+      setPlacedOnColumnAt(task.placedOnColumnAt ?? '');
+      setCompleted(task.completed);
+      setCompletedAt(task.completedAt ?? '');
+      setColumnId(task.columnId);
+      setAssigneeId(task.assigneeId ?? '');
+      setNotificationsEnabled(task.notificationsEnabled !== false);
+      setTags(task.tags);
+      setLinks(task.links ?? []);
+      setMilestones(task.milestones ?? []);
+      setReviewerId(task.reviewerId ?? '');
+      setReviewed(Boolean(task.reviewed));
+      setReviewedAt(task.reviewedAt ?? '');
+      setReviewedBy(task.reviewedBy ?? '');
+      setAssigneeError(null);
+      setReviewError(null);
+      setErrorMsg(null);
+      lastSyncedTaskRef.current = task;
+      return;
+    }
+
+    if (prev.title !== task.title) setTitle(task.title);
+    if (prev.description !== task.description) setDescription(task.description);
+    if (prev.priority !== task.priority) setPriority(task.priority);
+    if (prev.dueDate !== task.dueDate) setDueDate(task.dueDate);
+    if ((prev.placedOnColumnAt ?? '') !== (task.placedOnColumnAt ?? '')) {
+      setPlacedOnColumnAt(task.placedOnColumnAt ?? '');
+    }
+    if (prev.completed !== task.completed) setCompleted(task.completed);
+    if ((prev.completedAt ?? '') !== (task.completedAt ?? '')) {
+      setCompletedAt(task.completedAt ?? '');
+    }
+    if (prev.columnId !== task.columnId) setColumnId(task.columnId);
+    if (!savingAssignee && (prev.assigneeId ?? '') !== (task.assigneeId ?? '')) {
+      setAssigneeId(task.assigneeId ?? '');
+    }
+    if ((prev.notificationsEnabled !== false) !== (task.notificationsEnabled !== false)) {
+      setNotificationsEnabled(task.notificationsEnabled !== false);
+    }
+    if (serializeForSync(prev.tags) !== serializeForSync(task.tags)) {
+      setTags(task.tags);
+    }
+    if (serializeForSync(prev.links ?? []) !== serializeForSync(task.links ?? [])) {
+      setLinks(task.links ?? []);
+    }
+    if (serializeForSync(prev.milestones ?? []) !== serializeForSync(task.milestones ?? [])) {
+      setMilestones(task.milestones ?? []);
+    }
+    if (!savingReview) {
+      if ((prev.reviewerId ?? '') !== (task.reviewerId ?? '')) {
+        setReviewerId(task.reviewerId ?? '');
+      }
+      if (Boolean(prev.reviewed) !== Boolean(task.reviewed)) {
+        setReviewed(Boolean(task.reviewed));
+      }
+      if ((prev.reviewedAt ?? '') !== (task.reviewedAt ?? '')) {
+        setReviewedAt(task.reviewedAt ?? '');
+      }
+      if ((prev.reviewedBy ?? '') !== (task.reviewedBy ?? '')) {
+        setReviewedBy(task.reviewedBy ?? '');
+      }
+    }
+
+    lastSyncedTaskRef.current = {
+      ...task,
+      assigneeId: savingAssignee ? prev.assigneeId : task.assigneeId,
+      reviewerId: savingReview ? prev.reviewerId : task.reviewerId,
+      reviewed: savingReview ? prev.reviewed : task.reviewed,
+      reviewedAt: savingReview ? prev.reviewedAt : task.reviewedAt,
+      reviewedBy: savingReview ? prev.reviewedBy : task.reviewedBy,
+    };
+  }, [task, savingAssignee, savingReview]);
 
   useEffect(() => {
     const unsub = subscribeSubtasks(board.id, task.id, setSubtasks);
@@ -287,7 +379,7 @@ export function TaskDetailModal({
       });
       onClose();
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to save task changes.');
+      setErrorMsg(formatTaskMutationError(err, 'Unable to save task changes.'));
       setSaving(false);
     }
   };
@@ -308,7 +400,7 @@ export function TaskDetailModal({
       await deleteTask(board.id, task.id);
       onClose();
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to delete task.');
+      setErrorMsg(formatTaskMutationError(err, 'Unable to delete task.'));
       setSaving(false);
     }
   };
@@ -323,7 +415,7 @@ export function TaskDetailModal({
       await sendTaskMessage(uid, senderName, board, { id: task.id, title: title.trim() || task.title }, clean);
       setNewMessageText('');
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to send chat message.');
+      setErrorMsg(formatTaskMutationError(err, 'Unable to send chat message.'));
     } finally {
       setSendingMessage(false);
     }
@@ -333,14 +425,16 @@ export function TaskDetailModal({
     if (!canAssignTasks || savingAssignee) return;
     const prevAssigneeId = assigneeId;
     setAssigneeId(nextAssigneeId);
-    if (canEditTasks) return;
     setSavingAssignee(true);
+    setAssigneeError(null);
     setErrorMsg(null);
     try {
       await updateTaskAssignee(board.id, task.id, nextAssigneeId);
     } catch (err) {
       setAssigneeId(prevAssigneeId);
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to update assignee.');
+      const formatted = formatTaskMutationError(err, 'Unable to update assignee.');
+      setAssigneeError(formatted);
+      setErrorMsg(formatted);
     } finally {
       setSavingAssignee(false);
     }
@@ -351,12 +445,15 @@ export function TaskDetailModal({
     const prevReviewerId = reviewerId;
     setReviewerId(nextReviewerId);
     setSavingReview(true);
+    setReviewError(null);
     setErrorMsg(null);
     try {
       await updateTaskReviewer(board.id, task.id, nextReviewerId);
     } catch (err) {
       setReviewerId(prevReviewerId);
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to assign reviewer.');
+      const formatted = formatTaskMutationError(err, 'Unable to assign reviewer.');
+      setReviewError(formatted);
+      setErrorMsg(formatted);
     } finally {
       setSavingReview(false);
     }
@@ -373,6 +470,7 @@ export function TaskDetailModal({
     setReviewedAt(nextReviewed ? getTodayDateKey() : '');
     setReviewedBy(nextReviewed ? uid : '');
     setSavingReview(true);
+    setReviewError(null);
     setErrorMsg(null);
     try {
       await toggleTaskReviewed(board.id, task.id, nextReviewed, uid);
@@ -380,7 +478,9 @@ export function TaskDetailModal({
       setReviewed(prevReviewed);
       setReviewedAt(prevReviewedAt);
       setReviewedBy(prevReviewedBy);
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to update review status.');
+      const formatted = formatTaskMutationError(err, 'Unable to update review status.');
+      setReviewError(formatted);
+      setErrorMsg(formatted);
     } finally {
       setSavingReview(false);
     }
@@ -573,7 +673,20 @@ export function TaskDetailModal({
                       {opt.label}
                     </option>
                   ))}
+                  {assigneeId && !assigneeOptions.some((opt) => opt.uid === assigneeId) && (
+                    <option value={assigneeId}>Board member</option>
+                  )}
                 </select>
+                {savingAssignee && (
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Saving assignee...
+                  </p>
+                )}
+                {assigneeError && (
+                  <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
+                    {assigneeError}
+                  </p>
+                )}
                 {canEditTasks && !canAssignTasks && (
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
                     Requires &ldquo;Add assignee / reviewer&rdquo; permission.
@@ -1149,7 +1262,20 @@ export function TaskDetailModal({
                       {opt.label}
                     </option>
                   ))}
+                  {reviewerId && !assigneeOptions.some((opt) => opt.uid === reviewerId) && (
+                    <option value={reviewerId}>Board member</option>
+                  )}
                 </select>
+                {savingReview && (
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Saving review status...
+                  </p>
+                )}
+                {reviewError && (
+                  <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">
+                    {reviewError}
+                  </p>
+                )}
                 {canEditTasks && !canAssignTasks && (
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
                     Requires &ldquo;Add assignee / reviewer&rdquo; permission.
@@ -1242,7 +1368,7 @@ export function TaskDetailModal({
               <button
                 type="submit"
                 form="task-edit-form"
-                disabled={saving}
+                disabled={saving || savingAssignee || savingReview}
                 className="px-4 py-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap"
               >
                 {saving ? 'Saving...' : 'Save changes'}
