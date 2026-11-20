@@ -35,13 +35,16 @@ import {
   LIMITS,
   type AccessCode,
   type AdminRecord,
+  type BoardBackground,
   type WhitelistEntry,
 } from '../types/kanban';
+import { AdminBoardBackgroundsSection } from './AdminBoardBackgroundsSection';
 
 interface AdminPageProps {
   uid: string;
   isBootstrapAdmin: boolean;
   totalBoardsCount: number;
+  boardBackgrounds: BoardBackground[];
   onBackToWorkspace: () => void;
 }
 
@@ -49,6 +52,7 @@ export function AdminPage({
   uid,
   isBootstrapAdmin,
   totalBoardsCount,
+  boardBackgrounds,
   onBackToWorkspace,
 }: AdminPageProps) {
   // Subscriptions
@@ -988,6 +992,9 @@ export function AdminPage({
             </section>
           </div>
         </div>
+
+        {/* Board Backgrounds Catalog & Build Assets */}
+        <AdminBoardBackgroundsSection uid={uid} backgrounds={boardBackgrounds} />
       </div>
     </div>
   );

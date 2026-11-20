@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { Archive, Copy, Download, FileUp, Image as ImageIcon, Trash2, Upload, X } from 'lucide-react';
+import { Archive, Copy, Download, FileUp, Image as ImageIcon, ImageOff, Trash2, Upload, X } from 'lucide-react';
+import { resolveSafeBoardBackgroundUrl } from '../lib/boardBackgrounds';
 import { exportBoardToFile, type BoardExportFormat } from '../lib/boardExport';
 import { parseImportedBoardFile, type ParsedImportedBoard } from '../lib/boardImport';
 import {
@@ -14,12 +15,14 @@ import {
   BOARD_TEMPLATES,
   LIMITS,
   type Board,
+  type BoardBackground,
   type BoardTemplate,
   type Column,
   type Subtask,
   type Task,
   type TaskMessage,
 } from '../types/kanban';
+import { BoardBackgroundModal } from './BoardBackgroundModal';
 
 interface BoardModalProps {
   uid: string;
@@ -27,6 +30,7 @@ interface BoardModalProps {
   mode: 'create' | 'edit';
   board?: Board;
   boards?: Board[];
+  boardBackgrounds?: BoardBackground[];
   initialCreateTab?: 'template' | 'clone' | 'import';
   initialCloneSourceBoardId?: string;
   isAdmin: boolean;
@@ -39,17 +43,8 @@ interface BoardModalProps {
   onCreated: (boardId: string) => void;
   onDeleted: (deletedBoardId: string) => void;
   onRequestClone?: (sourceBoard: Board) => void;
+  onOpenAdminBackgrounds?: () => void;
   onClose: () => void;
-}
-
-function getSafePreviewUrl(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed || !/^https?:\/\/[^\s]+$/i.test(trimmed)) return null;
-  try {
-    return new URL(trimmed).href;
-  } catch {
-    return null;
-  }
 }
 
 const SOURCE_FORMAT_LABELS: Record<ParsedImportedBoard['sourceFormat'], string> = {
@@ -70,6 +65,7 @@ export function BoardModal({
   mode,
   board,
   boards = [],
+  boardBackgrounds = [],
   initialCreateTab = 'template',
   initialCloneSourceBoardId,
   isAdmin,
@@ -82,6 +78,7 @@ export function BoardModal({
   onCreated,
   onDeleted,
   onRequestClone,
+  onOpenAdminBackgrounds,
   onClose,
 }: BoardModalProps) {
   const initialCloneSource =
@@ -118,6 +115,7 @@ export function BoardModal({
       : 80
   );
   const [previewLoadError, setPreviewLoadError] = useState(false);
+  const [bgPickerOpen, setBgPickerOpen] = useState(false);
 
   const [template, setTemplate] = useState<BoardTemplate>('standard');
   const [importedBoard, setImportedBoard] = useState<ParsedImportedBoard | null>(null);
@@ -136,15 +134,18 @@ export function BoardModal({
     (mode === 'create' && (isAdmin || canCreateBoards)) ||
     (mode === 'edit' && Boolean(board) && (isAdmin || (board!.ownerId === uid && !isArchived)));
 
-  const safePreviewUrl = getSafePreviewUrl(backgroundImageUrl);
+  const safePreviewUrl = resolveSafeBoardBackgroundUrl(backgroundImageUrl);
+  const matchedCatalogBg = boardBackgrounds.find(
+    (bg) => bg.imageUrl.trim() === backgroundImageUrl.trim()
+  );
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !bgPickerOpen) onClose();
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [onClose]);
+  }, [onClose, bgPickerOpen]);
 
   const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -592,45 +593,74 @@ export function BoardModal({
 
           {mode === 'edit' && (
             <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-4">
-              <div className="space-y-1.5">
-                <label
-                  htmlFor="board-bg-url-input"
-                  className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
-                >
-                  Board Background Image URL
-                </label>
-                <div className="relative flex items-center">
-                  <ImageIcon className="w-4 h-4 text-slate-400 absolute left-3 pointer-events-none" />
-                  <input
-                    id="board-bg-url-input"
-                    type="url"
-                    disabled={!canEditBoard}
-                    maxLength={LIMITS.BOARD_BG_URL_MAX}
-                    value={backgroundImageUrl}
-                    onChange={(e) => {
-                      setBackgroundImageUrl(e.target.value);
-                      setPreviewLoadError(false);
-                    }}
-                    placeholder="https://example.com/wallpaper.jpg"
-                    className="w-full pl-9 pr-8 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:opacity-60"
-                  />
-                  {backgroundImageUrl && canEditBoard && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                      Board Background Picture
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Select from workspace backgrounds curated by admins.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 p-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className="w-16 h-10 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 overflow-hidden shrink-0 flex items-center justify-center">
+                      {safePreviewUrl && !previewLoadError ? (
+                        <img
+                          src={safePreviewUrl}
+                          alt={matchedCatalogBg?.label || 'Selected board background'}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <ImageOff className="w-4 h-4 text-slate-400" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
+                        {backgroundImageUrl.trim()
+                          ? matchedCatalogBg?.label || 'Custom Background'
+                          : 'Default Workspace Canvas'}
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                        {backgroundImageUrl.trim()
+                          ? matchedCatalogBg
+                            ? matchedCatalogBg.sourceType === 'build'
+                              ? 'Built-in library asset'
+                              : 'Admin web image'
+                            : 'Active on this board'
+                          : 'No background image applied'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {backgroundImageUrl && canEditBoard && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBackgroundImageUrl('');
+                          setPreviewLoadError(false);
+                        }}
+                        className="px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 rounded-lg transition-colors whitespace-nowrap"
+                      >
+                        Clear
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={() => {
-                        setBackgroundImageUrl('');
-                        setPreviewLoadError(false);
-                      }}
-                      aria-label="Clear background image URL"
-                      className="absolute right-2.5 p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded"
+                      disabled={!canEditBoard}
+                      onClick={() => setBgPickerOpen(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-800 dark:text-slate-200 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap"
                     >
-                      <X className="w-3.5 h-3.5" />
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span>Choose Background</span>
                     </button>
-                  )}
+                  </div>
                 </div>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Applies only to this board&apos;s canvas. Leave empty for the default workspace background.
-                </p>
               </div>
 
               <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 p-3.5 space-y-3">
@@ -866,6 +896,35 @@ export function BoardModal({
           </div>
         </form>
       </div>
+
+      {bgPickerOpen && board && (
+        <BoardBackgroundModal
+          board={board}
+          backgrounds={boardBackgrounds}
+          canEdit={canEditBoard}
+          isAdmin={isAdmin}
+          draftValues={{
+            backgroundImageUrl,
+            surfaceOpacityEnabled,
+            surfaceOpacity,
+          }}
+          onApplyDraft={(next) => {
+            setBackgroundImageUrl(next.backgroundImageUrl);
+            setSurfaceOpacityEnabled(next.surfaceOpacityEnabled);
+            setSurfaceOpacity(next.surfaceOpacity);
+            setPreviewLoadError(false);
+          }}
+          onOpenAdminBackgrounds={
+            onOpenAdminBackgrounds
+              ? () => {
+                  onClose();
+                  onOpenAdminBackgrounds();
+                }
+              : undefined
+          }
+          onClose={() => setBgPickerOpen(false)}
+        />
+      )}
     </div>
   );
 }

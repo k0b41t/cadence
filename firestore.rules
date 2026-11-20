@@ -409,10 +409,33 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidBundledBgPath(url) {
+      return url is string
+        && url.size() <= 500
+        && !url.matches('.*\\.\\..*')
+        && url.matches('^/src/assets/(images|backgrounds)/[a-zA-Z0-9_\\-\\.]+\\.(jpg|jpeg|png|webp|avif|svg)$');
+    }
+
     function isValidBoardBgUrl(url) {
       return url is string
         && url.size() <= 500
-        && (url == '' || (url.size() >= 8 && url.matches('^https?://[^\\s]+$')));
+        && (
+          url == ''
+          || (url.size() >= 8 && url.matches('^https?://[^\\s]+$'))
+          || isValidBundledBgPath(url)
+        );
+    }
+
+    function isValidBoardBackground(data, bgId) {
+      return data.id is string && data.id == bgId && isValidId(data.id)
+        && data.label is string && data.label.size() >= 1 && data.label.size() <= 60
+        && data.imageUrl is string && data.imageUrl != '' && isValidBoardBgUrl(data.imageUrl)
+        && data.sourceType in ['build', 'url']
+        && data.active is bool
+        && data.sortOrder is number && data.sortOrder >= 0 && data.sortOrder <= 1000000
+        && data.createdBy is string && isValidId(data.createdBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
     }
 
     function isValidBoardCustomRoleItem(item) {
@@ -677,6 +700,34 @@ service cloud.firestore {
         );
 
       allow delete: if isAdmin() && isValidId(codeId);
+    }
+
+    // -------------------------------------------------------------------------
+    // Admin-Managed Board Background Library
+    // -------------------------------------------------------------------------
+    match /boardBackgrounds/{backgroundId} {
+      allow get: if isAllowedWorkspaceUser() && isValidId(backgroundId);
+      allow list: if isAllowedWorkspaceUser();
+
+      allow create: if isAdmin()
+        && isValidId(backgroundId)
+        && incoming().keys().hasAll(['id', 'label', 'imageUrl', 'sourceType', 'active', 'sortOrder', 'createdBy', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['id', 'label', 'imageUrl', 'sourceType', 'active', 'sortOrder', 'createdBy', 'createdAt', 'updatedAt'])
+        && isValidBoardBackground(incoming(), backgroundId)
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isAdmin()
+        && isValidId(backgroundId)
+        && isValidBoardBackground(incoming(), backgroundId)
+        && incoming().id == existing().id
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['label', 'imageUrl', 'sourceType', 'active', 'sortOrder', 'updatedAt']);
+
+      allow delete: if isAdmin() && isValidId(backgroundId);
     }
 
     // -------------------------------------------------------------------------
@@ -997,6 +1048,7 @@ service cloud.firestore {
             && (
               (incoming().status == 'archived' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
               (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'backgroundImageUrl', 'surfaceOpacityEnabled', 'surfaceOpacity', 'updatedAt'])) ||
+              (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['backgroundImageUrl', 'surfaceOpacityEnabled', 'surfaceOpacity', 'updatedAt'])) ||
               (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['customRoles', 'updatedAt'])) ||
               (incoming().status == existing().status && incoming().diff(existing()).affectedKeys().hasOnly(['ownerDisplayName', 'updatedAt']))
             )

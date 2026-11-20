@@ -358,7 +358,7 @@
         },
         "backgroundImageUrl": {
           "type": "string",
-          "description": "Optional https/http image URL used as the background for this board only.",
+          "description": "Optional https/http image URL or safe bundled /src/assets/ path used as the background for this board only.",
           "maxLength": 500
         },
         "surfaceOpacityEnabled": {
@@ -1140,6 +1140,63 @@
         }
       },
       "required": ["id", "boardId", "taskId", "taskTitle", "ownerId", "senderId", "senderName", "text", "createdAt", "updatedAt"]
+    },
+    "BoardBackground": {
+      "title": "BoardBackground",
+      "description": "Admin-curated board background option referencing a build-bundled asset or external image URL.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Background document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "label": {
+          "type": "string",
+          "description": "Display label shown in the board background picker.",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "imageUrl": {
+          "type": "string",
+          "description": "Bundled /src/assets/(images|backgrounds)/ path or https/http image URL.",
+          "minLength": 8,
+          "maxLength": 500
+        },
+        "sourceType": {
+          "type": "string",
+          "description": "Whether this option points to a build-bundled asset or an external URL.",
+          "enum": ["build", "url"]
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether this background is enabled for users to pick on boards."
+        },
+        "sortOrder": {
+          "type": "number",
+          "description": "Display order index in the picker."
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "UID of the admin who added this background.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last update timestamp."
+        }
+      },
+      "required": ["id", "label", "imageUrl", "sourceType", "active", "sortOrder", "createdBy", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -1210,6 +1267,10 @@
     "/boards/{boardId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/TaskMessage" },
       "description": "Task chat log messages belonging to a Kanban board and linked to a task."
+    },
+    "/boardBackgrounds/{backgroundId}": {
+      "schema": { "$ref": "#/entities/BoardBackground" },
+      "description": "Admin-managed library of board background pictures available to board creators and admins."
     }
   }
 }

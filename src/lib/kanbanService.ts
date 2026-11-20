@@ -15,6 +15,7 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import type { ParsedImportedBoard } from './boardImport';
+import { isValidBoardBackgroundUrl, normalizeBoardBackgroundUrl } from './boardBackgrounds';
 import { isValidColumnColorValue, normalizeColumnColorValue } from './colorUtils';
 import { db, handleFirestoreError, OperationType } from './firebase';
 import {
@@ -26,6 +27,8 @@ import {
   type AccessCode,
   type AdminRecord,
   type Board,
+  type BoardBackground,
+  type BoardBackgroundSourceType,
   type BoardCode,
   type BoardCustomRole,
   type BoardInvite,
@@ -1318,7 +1321,7 @@ export async function cloneBoard(
   }
 
   const rawBg = (sourceBoard.backgroundImageUrl ?? '').trim();
-  if (rawBg && rawBg.length <= LIMITS.BOARD_BG_URL_MAX && /^https?:\/\/[^\s]+$/i.test(rawBg)) {
+  if (rawBg && isValidBoardBackgroundUrl(rawBg, false)) {
     boardPayload.backgroundImageUrl = rawBg;
   }
   if (typeof sourceBoard.surfaceOpacityEnabled === 'boolean') {
@@ -1535,17 +1538,7 @@ export async function updateBoardDetails(
   };
 
   if (appearance) {
-    const rawBg = (appearance.backgroundImageUrl ?? '').trim();
-    if (rawBg) {
-      if (rawBg.length > LIMITS.BOARD_BG_URL_MAX || !/^https?:\/\/[^\s]+$/i.test(rawBg)) {
-        throw new Error('Background image URL must start with http:// or https:// and contain no spaces.');
-      }
-      try {
-        new URL(rawBg);
-      } catch {
-        throw new Error('Please enter a valid background image URL.');
-      }
-    }
+    const rawBg = normalizeBoardBackgroundUrl(appearance.backgroundImageUrl ?? '');
     payload.backgroundImageUrl = rawBg;
     payload.surfaceOpacityEnabled = Boolean(appearance.surfaceOpacityEnabled);
     const rawOpacity =
@@ -1557,6 +1550,34 @@ export async function updateBoardDetails(
 
   try {
     await updateDoc(doc(db, 'boards', boardId), payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function updateBoardAppearance(
+  boardId: string,
+  appearance: {
+    backgroundImageUrl: string;
+    surfaceOpacityEnabled: boolean;
+    surfaceOpacity: number;
+  }
+): Promise<void> {
+  assertValidId(boardId, 'boardId');
+  const path = `boards/${boardId}`;
+  const cleanBg = normalizeBoardBackgroundUrl(appearance.backgroundImageUrl ?? '');
+  const rawOpacity =
+    typeof appearance.surfaceOpacity === 'number' && Number.isFinite(appearance.surfaceOpacity)
+      ? appearance.surfaceOpacity
+      : 80;
+
+  try {
+    await updateDoc(doc(db, 'boards', boardId), {
+      backgroundImageUrl: cleanBg,
+      surfaceOpacityEnabled: Boolean(appearance.surfaceOpacityEnabled),
+      surfaceOpacity: Math.round(Math.max(0, Math.min(100, rawOpacity))),
+      updatedAt: serverTimestamp(),
+    });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -3645,5 +3666,174 @@ export async function deleteAccessCode(codeId: string): Promise<void> {
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
+}
+
+// -----------------------------------------------------------------------------
+// Admin-Managed Board Backgrounds Library
+// -----------------------------------------------------------------------------
+
+function clampBackgroundSortOrder(val: number | undefined): number {
+  if (typeof val !== 'number' || !Number.isFinite(val)) return 1000;
+  return Math.max(0, Math.min(LIMITS.POSITION_MAX, Math.round(val)));
+}
+
+export function subscribeBoardBackgrounds(
+  onData: (backgrounds: BoardBackground[]) => void
+): Unsubscribe {
+  return onSnapshot(
+    collection(db, 'boardBackgrounds'),
+    (snapshot) => {
+      const items = snapshot.docs.map((d) => d.data() as BoardBackground);
+      items.sort((a, b) => {
+        const orderDiff = (a.sortOrder ?? 1000) - (b.sortOrder ?? 1000);
+        if (orderDiff !== 0) return orderDiff;
+        const timeDiff = (a.createdAt?.toMillis?.() ?? 0) - (b.createdAt?.toMillis?.() ?? 0);
+        if (timeDiff !== 0) return timeDiff;
+        return a.label.localeCompare(b.label);
+      });
+      onData(items);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'boardBackgrounds');
+    }
+  );
+}
+
+export async function createBoardBackground(
+  actorUid: string,
+  input: {
+    label: string;
+    imageUrl: string;
+    sourceType: BoardBackgroundSourceType;
+    active?: boolean;
+    sortOrder?: number;
+  }
+): Promise<string> {
+  assertValidId(actorUid, 'userId');
+  const cleanLabel = sanitizeText(input.label, LIMITS.BOARD_BG_LABEL_MAX);
+  if (!cleanLabel) throw new Error('Background label cannot be empty.');
+  const cleanUrl = normalizeBoardBackgroundUrl(input.imageUrl);
+  if (!cleanUrl) throw new Error('Background image URL or build path cannot be empty.');
+
+  const bgId = generateId('bg');
+  const path = `boardBackgrounds/${bgId}`;
+
+  try {
+    await setDoc(doc(db, 'boardBackgrounds', bgId), {
+      id: bgId,
+      label: cleanLabel,
+      imageUrl: cleanUrl,
+      sourceType: input.sourceType,
+      active: input.active !== false,
+      sortOrder: clampBackgroundSortOrder(input.sortOrder),
+      createdBy: actorUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+
+  return bgId;
+}
+
+export async function updateBoardBackground(
+  backgroundId: string,
+  current: BoardBackground,
+  patch: {
+    label?: string;
+    imageUrl?: string;
+    sourceType?: BoardBackgroundSourceType;
+    active?: boolean;
+    sortOrder?: number;
+  }
+): Promise<void> {
+  assertValidId(backgroundId, 'backgroundId');
+  const cleanLabel =
+    patch.label !== undefined
+      ? sanitizeText(patch.label, LIMITS.BOARD_BG_LABEL_MAX)
+      : sanitizeText(current.label, LIMITS.BOARD_BG_LABEL_MAX);
+  if (!cleanLabel) throw new Error('Background label cannot be empty.');
+
+  const cleanUrl =
+    patch.imageUrl !== undefined
+      ? normalizeBoardBackgroundUrl(patch.imageUrl)
+      : normalizeBoardBackgroundUrl(current.imageUrl);
+  if (!cleanUrl) throw new Error('Background image URL or build path cannot be empty.');
+
+  const path = `boardBackgrounds/${backgroundId}`;
+  try {
+    await updateDoc(doc(db, 'boardBackgrounds', backgroundId), {
+      label: cleanLabel,
+      imageUrl: cleanUrl,
+      sourceType: patch.sourceType ?? current.sourceType,
+      active: patch.active !== undefined ? Boolean(patch.active) : Boolean(current.active),
+      sortOrder: clampBackgroundSortOrder(
+        patch.sortOrder !== undefined ? patch.sortOrder : current.sortOrder
+      ),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteBoardBackground(backgroundId: string): Promise<void> {
+  assertValidId(backgroundId, 'backgroundId');
+  const path = `boardBackgrounds/${backgroundId}`;
+  try {
+    await deleteDoc(doc(db, 'boardBackgrounds', backgroundId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function includeBundledBoardBackgrounds(
+  actorUid: string,
+  items: Array<{ label: string; imageUrl: string }>,
+  existingBackgrounds: BoardBackground[]
+): Promise<number> {
+  assertValidId(actorUid, 'userId');
+  const existingUrls = new Set(existingBackgrounds.map((bg) => bg.imageUrl.trim()));
+  let maxSort = existingBackgrounds.reduce((max, bg) => Math.max(max, bg.sortOrder ?? 0), 0);
+
+  const toCreate = items.filter((item) => {
+    const cleanUrl = normalizeBoardBackgroundUrl(item.imageUrl);
+    return cleanUrl && !existingUrls.has(cleanUrl);
+  });
+  if (toCreate.length === 0) return 0;
+
+  let added = 0;
+  for (let start = 0; start < toCreate.length; start += 400) {
+    const chunk = toCreate.slice(start, start + 400);
+    const batch = writeBatch(db);
+    chunk.forEach((item) => {
+      maxSort += 100;
+      const bgId = generateId('bg');
+      const cleanLabel =
+        sanitizeText(item.label, LIMITS.BOARD_BG_LABEL_MAX) || 'Workspace Background';
+      const cleanUrl = normalizeBoardBackgroundUrl(item.imageUrl);
+      batch.set(doc(db, 'boardBackgrounds', bgId), {
+        id: bgId,
+        label: cleanLabel,
+        imageUrl: cleanUrl,
+        sourceType: 'build',
+        active: true,
+        sortOrder: clampBackgroundSortOrder(maxSort),
+        createdBy: actorUid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      added += 1;
+    });
+
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'boardBackgrounds');
+    }
+  }
+
+  return added;
 }
 

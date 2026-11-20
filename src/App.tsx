@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Columns3,
   Copy,
+  Image as ImageIcon,
   Menu,
   MessageSquare,
   Plus,
@@ -22,6 +23,7 @@ import { AccessDeniedView } from './components/AccessDeniedView';
 import { AddUsersModal } from './components/AddUsersModal';
 import { AdminPage } from './components/AdminPage';
 import { AllChatsModal } from './components/AllChatsModal';
+import { BoardBackgroundModal } from './components/BoardBackgroundModal';
 import { BoardModal } from './components/BoardModal';
 import { CalendarTimelineView } from './components/CalendarTimelineView';
 import { ColumnSettingsModal } from './components/ColumnSettingsModal';
@@ -36,6 +38,7 @@ import { Sidebar } from './components/Sidebar';
 import { SignInView } from './components/SignInView';
 import { TaskDetailModal } from './components/TaskDetailModal';
 import { ThemeSettingsModal } from './components/ThemeSettingsModal';
+import { resolveSafeBoardBackgroundUrl } from './lib/boardBackgrounds';
 import { auth } from './lib/firebase';
 import {
   applyFontsToDocument,
@@ -64,6 +67,7 @@ import {
   subscribeAccessibleBoards,
   subscribeAllBoardsMessages,
   subscribeAllBoardsTasks,
+  subscribeBoardBackgrounds,
   subscribeBoardMembers,
   subscribeBoardMessages,
   subscribeBoardSubtasks,
@@ -85,6 +89,7 @@ import {
   LIMITS,
   resolveRoleFromPermissions,
   type Board,
+  type BoardBackground,
   type BoardMember,
   type Column,
   type PendingBoardJoinTarget,
@@ -226,6 +231,7 @@ function WorkspaceApp() {
   const [subtasksByTask, setSubtasksByTask] = useState<Record<string, Subtask[]>>({});
   const [allMessages, setAllMessages] = useState<TaskMessage[]>([]);
   const [allTasks, setAllTasks] = useState<Task[]>([]);
+  const [boardBackgrounds, setBoardBackgrounds] = useState<BoardBackground[]>([]);
 
   const [theme, setTheme] = useState<ThemeMode>(() => {
     if (typeof window !== 'undefined') {
@@ -255,6 +261,7 @@ function WorkspaceApp() {
     createTab?: 'template' | 'clone' | 'import';
     cloneSourceBoardId?: string;
   } | null>(null);
+  const [bgModalOpen, setBgModalOpen] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [allChatsOpen, setAllChatsOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -536,6 +543,7 @@ function WorkspaceApp() {
         setSubtasksByTask({});
         setAllMessages([]);
         setAllTasks([]);
+        setBoardBackgrounds([]);
         return;
       }
 
@@ -555,7 +563,7 @@ function WorkspaceApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Subscribe to profile & accessible boards once workspace is provisioned
+  // Subscribe to profile, accessible boards, and admin-curated board backgrounds once workspace is provisioned
   useEffect(() => {
     if (!user || !workspaceReady) return;
     const unsubProfile = subscribeUserProfile(user.uid, (p) => {
@@ -576,10 +584,12 @@ function WorkspaceApp() {
         return preferred;
       });
     });
+    const unsubBackgrounds = subscribeBoardBackgrounds(setBoardBackgrounds);
 
     return () => {
       unsubProfile();
       unsubBoards();
+      unsubBackgrounds();
     };
   }, [user, workspaceReady, isBootstrapAdmin]);
 
@@ -852,15 +862,10 @@ function WorkspaceApp() {
     [allTasks, boardMap]
   );
 
-  const safeBoardBackgroundUrl = useMemo(() => {
-    const raw = activeBoard?.backgroundImageUrl?.trim();
-    if (!raw || !/^https?:\/\/[^\s]+$/i.test(raw)) return null;
-    try {
-      return new URL(raw).href;
-    } catch {
-      return null;
-    }
-  }, [activeBoard?.backgroundImageUrl]);
+  const safeBoardBackgroundUrl = useMemo(
+    () => resolveSafeBoardBackgroundUrl(activeBoard?.backgroundImageUrl),
+    [activeBoard?.backgroundImageUrl]
+  );
 
   const handleSetTheme = async (next: ThemeMode) => {
     setTheme(next);
@@ -1358,6 +1363,20 @@ function WorkspaceApp() {
               </button>
             )}
 
+            {workspacePage !== 'admin' &&
+              activeBoard &&
+              (isAdmin || (activeBoard.ownerId === user.uid && !isArchived)) && (
+                <button
+                  type="button"
+                  onClick={() => setBgModalOpen(true)}
+                  aria-label="Board Background"
+                  title="Set board background"
+                  className="p-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors shrink-0"
+                >
+                  <ImageIcon className="w-4 h-4" />
+                </button>
+              )}
+
             {workspacePage !== 'admin' && activeBoard && (isAdmin || activeBoard.ownerId === user.uid) && (
               <button
                 type="button"
@@ -1606,6 +1625,7 @@ function WorkspaceApp() {
             uid={user.uid}
             isBootstrapAdmin={isBootstrapAdmin}
             totalBoardsCount={boards.length}
+            boardBackgrounds={boardBackgrounds}
             onBackToWorkspace={() => setWorkspacePage('workspace')}
           />
         ) : (
@@ -1783,6 +1803,7 @@ function WorkspaceApp() {
           mode={boardModalState.mode}
           board={boardModalState.board}
           boards={orderedBoards}
+          boardBackgrounds={boardBackgrounds}
           initialCreateTab={boardModalState.createTab}
           initialCloneSourceBoardId={boardModalState.cloneSourceBoardId ?? activeBoard?.id}
           isAdmin={isAdmin}
@@ -1800,6 +1821,9 @@ function WorkspaceApp() {
               cloneSourceBoardId: sourceBoard.id,
             })
           }
+          onOpenAdminBackgrounds={
+            isAdmin ? () => setWorkspacePage('admin') : undefined
+          }
           onDeleted={(deletedId) => {
             if (activeBoardId === deletedId) {
               const remaining = boards.filter((b) => b.id !== deletedId);
@@ -1807,6 +1831,19 @@ function WorkspaceApp() {
             }
           }}
           onClose={() => setBoardModalState(null)}
+        />
+      )}
+
+      {bgModalOpen && activeBoard && (
+        <BoardBackgroundModal
+          board={activeBoard}
+          backgrounds={boardBackgrounds}
+          canEdit={isAdmin || (activeBoard.ownerId === user.uid && !isArchived)}
+          isAdmin={isAdmin}
+          onOpenAdminBackgrounds={
+            isAdmin ? () => setWorkspacePage('admin') : undefined
+          }
+          onClose={() => setBgModalOpen(false)}
         />
       )}
 

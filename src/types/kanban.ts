@@ -19,6 +19,7 @@ export const LIMITS = {
   BOARD_TITLE_MAX: 80,
   BOARD_DESC_MAX: 300,
   BOARD_BG_URL_MAX: 500,
+  BOARD_BG_LABEL_MAX: 60,
   BOARD_CUSTOM_ROLES_MAX: 8,
   CUSTOM_ROLE_NAME_MAX: 40,
   COLUMN_TITLE_MAX: 50,
@@ -326,6 +327,20 @@ export interface BoardRef {
   boardOwnerId: string;
   role: BoardRole;
   customRoleName?: string;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export type BoardBackgroundSourceType = 'build' | 'url';
+
+export interface BoardBackground {
+  id: string;
+  label: string;
+  imageUrl: string;
+  sourceType: BoardBackgroundSourceType;
+  active: boolean;
+  sortOrder: number;
+  createdBy: string;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }
