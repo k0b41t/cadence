@@ -366,44 +366,50 @@ export function Sidebar({
 
       {/* Boards list */}
       <div
-        className="flex-1 overflow-y-auto px-3 py-4 space-y-6"
+        className="flex-1 overflow-y-auto px-3 py-4 space-y-5"
         onDragLeave={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
             setDropTarget(null);
           }
         }}
       >
+        <div
+          className={`grid gap-1.5 ${canCreateBoards ? 'grid-cols-2' : 'grid-cols-1'}`}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              onOpenJoinBoard();
+              onCloseMobile();
+            }}
+            aria-label="Join shared board"
+            title="Join shared board via invite link"
+            className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg transition-colors whitespace-nowrap"
+          >
+            <Link2 className="w-3.5 h-3.5 shrink-0" />
+            <span>Join</span>
+          </button>
+          {canCreateBoards && (
+            <button
+              type="button"
+              onClick={() => {
+                onOpenNewBoard();
+                onCloseMobile();
+              }}
+              aria-label="Create new board"
+              className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-950/70 border border-blue-200/80 dark:border-blue-900/60 rounded-lg transition-colors whitespace-nowrap"
+            >
+              <Plus className="w-3.5 h-3.5 shrink-0" />
+              <span>New Board</span>
+            </button>
+          )}
+        </div>
+
         <div className="space-y-1.5">
-          <div className="px-2 flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+          <div className="px-2">
+            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">
               My Boards
             </span>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => {
-                  onOpenJoinBoard();
-                  onCloseMobile();
-                }}
-                aria-label="Join shared board"
-                title="Join shared board via invite link"
-                className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 px-1.5 py-0.5 rounded transition-colors whitespace-nowrap shrink-0"
-              >
-                <Link2 className="w-3.5 h-3.5" />
-                <span>Join</span>
-              </button>
-              {canCreateBoards && (
-                <button
-                  type="button"
-                  onClick={onOpenNewBoard}
-                  aria-label="Create new board"
-                  className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 px-1.5 py-0.5 rounded transition-colors whitespace-nowrap shrink-0"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>New</span>
-                </button>
-              )}
-            </div>
           </div>
 
           {myActiveBoards.length === 0 ? (
