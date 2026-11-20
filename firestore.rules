@@ -42,22 +42,38 @@ service cloud.firestore {
         && emailKey.matches('^[^@\\s/]+@[^@\\s/]+\\.[^@\\s/]+$');
     }
 
+    function whitelistDoc(emailKey) {
+      return get(/databases/$(database)/documents/whitelist/$(emailKey));
+    }
+
+    function isWhitelistedEmailActive(emailKey) {
+      let wl = whitelistDoc(emailKey);
+      return wl != null && wl.data.active == true;
+    }
+
     function isWhitelistedEmail() {
       return isVerifiedUser()
         && request.auth.token.email is string
-        && exists(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower()))
-        && get(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())).data.active == true;
+        && isWhitelistedEmailActive(request.auth.token.email.lower());
     }
 
     function isAllowedWorkspaceUser() {
       return isAdmin() || isWhitelistedEmail();
     }
 
+    function canEmailCreateBoards(emailKey) {
+      let wl = whitelistDoc(emailKey);
+      return wl != null
+        && wl.data.active == true
+        && ('canCreateBoards' in wl.data)
+        && wl.data.canCreateBoards == true;
+    }
+
     function canUserCreateBoards() {
       return isAdmin() || (
-        isWhitelistedEmail()
-        && 'canCreateBoards' in get(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())).data
-        && get(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())).data.canCreateBoards == true
+        isVerifiedUser()
+        && request.auth.token.email is string
+        && canEmailCreateBoards(request.auth.token.email.lower())
       );
     }
 
@@ -82,11 +98,13 @@ service cloud.firestore {
     }
 
     function isBoardOwner(boardId) {
-      return boardExists(boardId) && getBoard(boardId).data.ownerId == request.auth.uid;
+      let b = getBoard(boardId);
+      return b != null && b.data.ownerId == request.auth.uid;
     }
 
     function isBoardActive(boardId) {
-      return boardExists(boardId) && getBoard(boardId).data.status == 'active';
+      let b = getBoard(boardId);
+      return b != null && b.data.status == 'active';
     }
 
     function memberExists(boardId, uid) {
@@ -98,55 +116,60 @@ service cloud.firestore {
     }
 
     function isBoardMember(boardId) {
-      return isSignedIn() && memberExists(boardId, request.auth.uid) && getMember(boardId, request.auth.uid).data.canView == true;
+      let m = getMember(boardId, request.auth.uid);
+      return isSignedIn() && m != null && m.data.canView == true;
     }
 
     function canAccessBoard(boardId) {
       return isAdmin() || isBoardOwner(boardId) || isBoardMember(boardId);
     }
 
-    function isValidAssignee(boardId, assigneeId) {
-      return assigneeId == ''
-        || assigneeId == getBoard(boardId).data.ownerId
-        || memberExists(boardId, assigneeId)
-        || exists(/databases/$(database)/documents/admins/$(assigneeId))
-        || (isAdmin() && assigneeId == request.auth.uid);
+    function memberCanAssign(memberData) {
+      return (('canAssignTasks' in memberData) && memberData.canAssignTasks == true)
+        || (!('canAssignTasks' in memberData) && memberData.role == 'manager');
+    }
+
+    function isValidTaskPerson(boardId, boardOwnerId, personId) {
+      return personId == ''
+        || personId == boardOwnerId
+        || personId == request.auth.uid
+        || memberExists(boardId, personId)
+        || exists(/databases/$(database)/documents/admins/$(personId));
     }
 
     function canCreateTasksOnBoard(boardId) {
+      let m = getMember(boardId, request.auth.uid);
       return isAdmin()
         || isBoardOwner(boardId)
-        || (memberExists(boardId, request.auth.uid) && getMember(boardId, request.auth.uid).data.canCreateTasks == true);
+        || (m != null && m.data.canCreateTasks == true);
     }
 
     function canEditTasksOnBoard(boardId) {
+      let m = getMember(boardId, request.auth.uid);
       return isAdmin()
         || isBoardOwner(boardId)
-        || (memberExists(boardId, request.auth.uid) && getMember(boardId, request.auth.uid).data.canEditTasks == true);
+        || (m != null && m.data.canEditTasks == true);
     }
 
     function canDeleteTasksOnBoard(boardId) {
+      let m = getMember(boardId, request.auth.uid);
       return isAdmin()
         || isBoardOwner(boardId)
-        || (memberExists(boardId, request.auth.uid) && getMember(boardId, request.auth.uid).data.canDeleteTasks == true);
+        || (m != null && m.data.canDeleteTasks == true);
     }
 
     function canManageColumnsOnBoard(boardId) {
+      let m = getMember(boardId, request.auth.uid);
       return isAdmin()
         || isBoardOwner(boardId)
-        || (memberExists(boardId, request.auth.uid) && getMember(boardId, request.auth.uid).data.canManageColumns == true);
+        || (m != null && m.data.canManageColumns == true);
     }
 
     function canAssignTasksOnBoard(boardId) {
+      let m = getMember(boardId, request.auth.uid);
       return isAdmin()
         || isBoardOwner(boardId)
-        || (
-          memberExists(boardId, request.auth.uid)
-          && (
-            (('canAssignTasks' in getMember(boardId, request.auth.uid).data) && getMember(boardId, request.auth.uid).data.canAssignTasks == true)
-            || (!('canAssignTasks' in getMember(boardId, request.auth.uid).data) && getMember(boardId, request.auth.uid).data.role == 'manager')
-          )
-        );
+        || (m != null && memberCanAssign(m.data));
     }
 
     function assigneeUnchanged() {
@@ -161,42 +184,120 @@ service cloud.firestore {
         || (!('reviewerId' in existing()) && ('reviewerId' in incoming()) && incoming().reviewerId == '');
     }
 
-    function inviteMatchesMember(boardId, inviteId, data) {
-      return isValidId(inviteId)
-        && exists(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId))
-        && get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.active == true
-        && data.role == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.role
+    function isAllowedTaskEditAffectedKeys() {
+      return incoming().diff(existing()).affectedKeys().hasOnly(['columnId', 'position', 'placedOnColumnAt', 'updatedAt'])
+        || incoming().diff(existing()).affectedKeys().hasOnly(['columnId', 'position', 'updatedAt'])
+        || incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'completedAt', 'placedOnColumnAt', 'assigneeId', 'links', 'milestones', 'notificationsEnabled', 'updatedAt'])
+        || incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'completedAt', 'placedOnColumnAt', 'assigneeId', 'links', 'milestones', 'updatedAt'])
+        || incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'assigneeId', 'updatedAt'])
+        || incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'updatedAt'])
+        || incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'completedAt', 'updatedAt'])
+        || incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'updatedAt'])
+        || incoming().diff(existing()).affectedKeys().hasOnly(['notificationsEnabled', 'updatedAt'])
+        || incoming().diff(existing()).affectedKeys().hasOnly(['reviewed', 'reviewedAt', 'reviewedBy', 'updatedAt']);
+    }
+
+    function isAllowedTaskAssignAffectedKeys() {
+      return incoming().diff(existing()).affectedKeys().hasOnly(['assigneeId', 'updatedAt'])
+        || incoming().diff(existing()).affectedKeys().hasOnly(['reviewerId', 'updatedAt'])
+        || incoming().diff(existing()).affectedKeys().hasOnly(['reviewed', 'reviewedAt', 'reviewedBy', 'updatedAt'])
+        || incoming().diff(existing()).affectedKeys().hasOnly(['reviewerId', 'reviewed', 'reviewedAt', 'reviewedBy', 'updatedAt']);
+    }
+
+    function canMemberCreateTask(boardId, hasAssignInput) {
+      let m = getMember(boardId, request.auth.uid);
+      return m != null
+        && m.data.canCreateTasks == true
+        && (!hasAssignInput || memberCanAssign(m.data));
+    }
+
+    function canCreateTaskAsMemberOrOwner(boardId, boardDoc) {
+      let isOwnerActor = boardDoc.data.ownerId == request.auth.uid;
+      let hasAssignInput = incoming().assigneeId != '' || ('reviewerId' in incoming() && incoming().reviewerId != '');
+      return isWhitelistedEmail()
+        && boardDoc.data.status == 'active'
         && (
-          (!('customRoleName' in data) && !('customRoleName' in get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data)) ||
-          ('customRoleName' in data && 'customRoleName' in get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data && data.customRoleName == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.customRoleName)
+          isOwnerActor
+          || canMemberCreateTask(boardId, hasAssignInput)
+        );
+    }
+
+    function canCreateTaskAuthorized(boardId) {
+      let boardDoc = getBoard(boardId);
+      return boardDoc != null
+        && incoming().ownerId == boardDoc.data.ownerId
+        && (isAdmin() || canCreateTaskAsMemberOrOwner(boardId, boardDoc))
+        && isValidTaskPerson(boardId, boardDoc.data.ownerId, incoming().assigneeId)
+        && (!('reviewerId' in incoming()) || isValidTaskPerson(boardId, boardDoc.data.ownerId, incoming().reviewerId));
+    }
+
+    function canMemberUpdateTask(boardId) {
+      let m = getMember(boardId, request.auth.uid);
+      let canEdit = m != null && m.data.canEditTasks == true;
+      let canAssign = m != null && memberCanAssign(m.data);
+      return m != null
+        && (assigneeUnchanged() || canAssign)
+        && (reviewerUnchanged() || canAssign)
+        && (
+          (canEdit && isAllowedTaskEditAffectedKeys())
+          || (canAssign && isAllowedTaskAssignAffectedKeys())
+        );
+    }
+
+    function canUpdateTaskAuthorized(boardId) {
+      let isOwnerActor = existing().ownerId == request.auth.uid;
+      return (
+        isAdmin() || (
+          isWhitelistedEmail()
+          && isBoardActive(boardId)
+          && (
+            (isOwnerActor && (isAllowedTaskEditAffectedKeys() || isAllowedTaskAssignAffectedKeys()))
+            || (!isOwnerActor && canMemberUpdateTask(boardId))
+          )
         )
-        && data.canCreateTasks == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canCreateTasks
-        && data.canEditTasks == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canEditTasks
-        && data.canDeleteTasks == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canDeleteTasks
-        && data.canManageColumns == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canManageColumns
+      )
+      && (assigneeUnchanged() || isValidTaskPerson(boardId, existing().ownerId, incoming().assigneeId))
+      && (reviewerUnchanged() || isValidTaskPerson(boardId, existing().ownerId, incoming().reviewerId));
+    }
+
+    function inviteMatchesMember(boardId, inviteId, data) {
+      let inv = get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId));
+      return isValidId(inviteId)
+        && inv != null
+        && inv.data.active == true
+        && data.role == inv.data.role
         && (
-          ('canAssignTasks' in get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data && 'canAssignTasks' in data && data.canAssignTasks == get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.canAssignTasks) ||
-          (!('canAssignTasks' in get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data) && (!('canAssignTasks' in data) || data.canAssignTasks == (get(/databases/$(database)/documents/boards/$(boardId)/invites/$(inviteId)).data.role == 'manager')))
+          (!('customRoleName' in data) && !('customRoleName' in inv.data)) ||
+          ('customRoleName' in data && 'customRoleName' in inv.data && data.customRoleName == inv.data.customRoleName)
+        )
+        && data.canCreateTasks == inv.data.canCreateTasks
+        && data.canEditTasks == inv.data.canEditTasks
+        && data.canDeleteTasks == inv.data.canDeleteTasks
+        && data.canManageColumns == inv.data.canManageColumns
+        && (
+          ('canAssignTasks' in inv.data && 'canAssignTasks' in data && data.canAssignTasks == inv.data.canAssignTasks) ||
+          (!('canAssignTasks' in inv.data) && (!('canAssignTasks' in data) || data.canAssignTasks == (inv.data.role == 'manager')))
         );
     }
 
     function pendingBoardMatchesMember(boardId, emailKey, data) {
+      let grant = get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId));
       return isValidEmailKey(emailKey)
-        && exists(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId))
-        && exists(/databases/$(database)/documents/boards/$(boardId)/pendingMembers/$(get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.emailHash))
-        && data.ownerId == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.ownerId
-        && data.role == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.role
+        && grant != null
+        && exists(/databases/$(database)/documents/boards/$(boardId)/pendingMembers/$(grant.data.emailHash))
+        && data.ownerId == grant.data.ownerId
+        && data.role == grant.data.role
         && (
-          (!('customRoleName' in data) && !('customRoleName' in get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data)) ||
-          ('customRoleName' in data && 'customRoleName' in get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data && data.customRoleName == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.customRoleName)
+          (!('customRoleName' in data) && !('customRoleName' in grant.data)) ||
+          ('customRoleName' in data && 'customRoleName' in grant.data && data.customRoleName == grant.data.customRoleName)
         )
-        && data.canCreateTasks == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canCreateTasks
-        && data.canEditTasks == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canEditTasks
-        && data.canDeleteTasks == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canDeleteTasks
-        && data.canManageColumns == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canManageColumns
+        && data.canCreateTasks == grant.data.canCreateTasks
+        && data.canEditTasks == grant.data.canEditTasks
+        && data.canDeleteTasks == grant.data.canDeleteTasks
+        && data.canManageColumns == grant.data.canManageColumns
         && (
-          ('canAssignTasks' in get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data && 'canAssignTasks' in data && data.canAssignTasks == get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.canAssignTasks) ||
-          (!('canAssignTasks' in get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data) && (!('canAssignTasks' in data) || data.canAssignTasks == (get(/databases/$(database)/documents/whitelist/$(emailKey)/pendingBoards/$(boardId)).data.role == 'manager')))
+          ('canAssignTasks' in grant.data && 'canAssignTasks' in data && data.canAssignTasks == grant.data.canAssignTasks) ||
+          (!('canAssignTasks' in grant.data) && (!('canAssignTasks' in data) || data.canAssignTasks == (grant.data.role == 'manager')))
         );
     }
 
@@ -1115,7 +1216,7 @@ service cloud.firestore {
           canAccessBoard(boardId)
         );
 
-        allow create: if isAllowedWorkspaceUser()
+        allow create: if isVerifiedUser()
           && isValidId(boardId)
           && isValidId(taskId)
           && incoming().keys().hasAll(['id', 'boardId', 'columnId', 'ownerId', 'createdBy', 'assigneeId', 'title', 'description', 'priority', 'position', 'tags', 'dueDate', 'completed', 'createdAt', 'updatedAt'])
@@ -1124,18 +1225,10 @@ service cloud.firestore {
           && incoming().createdBy == request.auth.uid
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
-          && boardExists(boardId)
-          && incoming().ownerId == getBoard(boardId).data.ownerId
           && exists(/databases/$(database)/documents/boards/$(boardId)/columns/$(incoming().columnId))
-          && isValidAssignee(boardId, incoming().assigneeId)
-          && (!('reviewerId' in incoming()) || isValidAssignee(boardId, incoming().reviewerId))
-          && (
-            (incoming().assigneeId == '' && (!('reviewerId' in incoming()) || incoming().reviewerId == ''))
-            || canAssignTasksOnBoard(boardId)
-          )
-          && (isAdmin() || (isBoardActive(boardId) && canCreateTasksOnBoard(boardId)));
+          && canCreateTaskAuthorized(boardId);
 
-        allow update: if isAllowedWorkspaceUser()
+        allow update: if isVerifiedUser()
           && isValidId(boardId)
           && isValidId(taskId)
           && isValidTask(incoming(), boardId, taskId)
@@ -1145,21 +1238,6 @@ service cloud.firestore {
           && (!('createdBy' in existing()) || incoming().createdBy == existing().createdBy)
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
-          && exists(/databases/$(database)/documents/boards/$(boardId)/columns/$(incoming().columnId))
-          && (
-            assigneeUnchanged()
-            || (
-              canAssignTasksOnBoard(boardId)
-              && isValidAssignee(boardId, incoming().assigneeId)
-            )
-          )
-          && (
-            reviewerUnchanged()
-            || (
-              canAssignTasksOnBoard(boardId)
-              && isValidAssignee(boardId, incoming().reviewerId)
-            )
-          )
           && (
             !('reviewedBy' in incoming())
             || incoming().reviewedBy == ''
@@ -1167,37 +1245,10 @@ service cloud.firestore {
             || incoming().reviewedBy == request.auth.uid
           )
           && (
-            isAdmin()
-            || (
-              isBoardActive(boardId)
-              && (
-                (
-                  canEditTasksOnBoard(boardId)
-                  && (
-                    incoming().diff(existing()).affectedKeys().hasOnly(['columnId', 'position', 'placedOnColumnAt', 'updatedAt']) ||
-                    incoming().diff(existing()).affectedKeys().hasOnly(['columnId', 'position', 'updatedAt']) ||
-                    incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'completedAt', 'placedOnColumnAt', 'assigneeId', 'links', 'milestones', 'notificationsEnabled', 'updatedAt']) ||
-                    incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'completedAt', 'placedOnColumnAt', 'assigneeId', 'links', 'milestones', 'updatedAt']) ||
-                    incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'assigneeId', 'updatedAt']) ||
-                    incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'tags', 'dueDate', 'completed', 'updatedAt']) ||
-                    incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'completedAt', 'updatedAt']) ||
-                    incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'updatedAt']) ||
-                    incoming().diff(existing()).affectedKeys().hasOnly(['notificationsEnabled', 'updatedAt']) ||
-                    incoming().diff(existing()).affectedKeys().hasOnly(['reviewed', 'reviewedAt', 'reviewedBy', 'updatedAt'])
-                  )
-                )
-                || (
-                  canAssignTasksOnBoard(boardId)
-                  && (
-                    incoming().diff(existing()).affectedKeys().hasOnly(['assigneeId', 'updatedAt']) ||
-                    incoming().diff(existing()).affectedKeys().hasOnly(['reviewerId', 'updatedAt']) ||
-                    incoming().diff(existing()).affectedKeys().hasOnly(['reviewed', 'reviewedAt', 'reviewedBy', 'updatedAt']) ||
-                    incoming().diff(existing()).affectedKeys().hasOnly(['reviewerId', 'reviewed', 'reviewedAt', 'reviewedBy', 'updatedAt'])
-                  )
-                )
-              )
-            )
-          );
+            incoming().columnId == existing().columnId
+            || exists(/databases/$(database)/documents/boards/$(boardId)/columns/$(incoming().columnId))
+          )
+          && canUpdateTaskAuthorized(boardId);
 
         allow delete: if isAllowedWorkspaceUser()
           && isValidId(boardId)
