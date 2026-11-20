@@ -20,19 +20,19 @@ interface TaskCardProps {
 const PRIORITY_META: Record<Priority, { label: string; className: string }> = {
   urgent: {
     label: 'Urgent',
-    className: 'text-red-600 dark:text-red-400 font-medium',
+    className: 'text-red-600 dark:text-red-400 font-semibold',
   },
   high: {
     label: 'High',
-    className: 'text-amber-600 dark:text-amber-400 font-medium',
+    className: 'text-amber-600 dark:text-amber-400 font-semibold',
   },
   medium: {
     label: 'Medium',
-    className: 'text-blue-600 dark:text-blue-400',
+    className: 'text-blue-600 dark:text-blue-400 font-medium',
   },
   low: {
     label: 'Low',
-    className: 'text-slate-500 dark:text-slate-400',
+    className: 'text-slate-500 dark:text-slate-400 font-medium',
   },
 };
 
@@ -68,6 +68,77 @@ export function TaskCard({
   const milestoneCount = task.milestones?.length ?? 0;
   const completedSubtasks = subtasks.filter((s) => s.completed).length;
 
+  const metaItems: React.ReactNode[] = [];
+  if (due) {
+    metaItems.push(
+      <span
+        key="due"
+        className={
+          !task.completed && due.isOverdue
+            ? 'text-red-600 dark:text-red-400 font-medium'
+            : ''
+        }
+      >
+        {!task.completed && due.isOverdue ? `Overdue ${due.text}` : due.text}
+      </span>
+    );
+  }
+  if (task.tags.length > 0) {
+    metaItems.push(
+      <span key="tags" className="truncate max-w-[150px] text-slate-500 dark:text-slate-400">
+        {task.tags.join(' / ')}
+      </span>
+    );
+  }
+  if (linkCount > 0) {
+    metaItems.push(
+      <span
+        key="links"
+        title={`${linkCount} linked file/repo URL${linkCount === 1 ? '' : 's'}`}
+        className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300"
+      >
+        <Link2 className="w-3 h-3" />
+        <span>{linkCount}</span>
+      </span>
+    );
+  }
+  if (milestoneCount > 0) {
+    metaItems.push(
+      <span
+        key="milestones"
+        title={`${milestoneCount} important date${milestoneCount === 1 ? '' : 's'}`}
+        className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300"
+      >
+        <Flag className="w-3 h-3" />
+        <span>{milestoneCount}</span>
+      </span>
+    );
+  }
+  if (messageCount > 0) {
+    metaItems.push(
+      <span
+        key="messages"
+        className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300"
+      >
+        <MessageSquare className="w-3 h-3" />
+        <span>{messageCount}</span>
+      </span>
+    );
+  }
+  if (task.notificationsEnabled === false) {
+    metaItems.push(
+      <span
+        key="muted"
+        title="Task notifications muted"
+        className="inline-flex items-center gap-1 text-slate-400 dark:text-slate-500"
+      >
+        <BellOff className="w-3 h-3" />
+      </span>
+    );
+  }
+
+  const hasPeopleLines = Boolean(assigneeName || reviewerName || task.reviewed);
+
   return (
     <div
       draggable={canEdit}
@@ -85,35 +156,44 @@ export function TaskCard({
           onClick(task);
         }
       }}
-      className={`cadence-task-card group bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3.5 text-left transition-all duration-150 cursor-pointer hover:border-slate-300 dark:hover:border-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 ${
+      className={`cadence-task-card group bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3 text-left transition-all duration-150 cursor-pointer hover:border-slate-300 dark:hover:border-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 ${
         isDragging ? 'opacity-40 scale-[0.99]' : 'opacity-100'
       }`}
     >
       <div className="flex items-start gap-2.5">
-        <button
-          type="button"
-          disabled={!canEdit}
-          aria-label={task.completed ? `Mark "${task.title}" incomplete` : `Mark "${task.title}" complete`}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (canEdit) onToggleComplete(task);
-          }}
-          className={`mt-0.5 shrink-0 rounded-full transition-colors ${
-            task.completed
-              ? 'text-emerald-600 dark:text-emerald-400'
-              : 'text-slate-400 hover:text-slate-700 dark:text-slate-500 dark:hover:text-slate-300'
-          } disabled:opacity-50 disabled:cursor-default`}
-        >
-          {task.completed ? (
-            <span className="w-4 h-4 rounded-full bg-emerald-600 dark:bg-emerald-500 text-white flex items-center justify-center">
-              <Check className="w-2.5 h-2.5 stroke-[3]" />
-            </span>
-          ) : (
-            <Circle className="w-4 h-4" />
-          )}
-        </button>
+        <div className="flex flex-col items-center gap-2 shrink-0 w-4">
+          <button
+            type="button"
+            disabled={!canEdit}
+            aria-label={task.completed ? `Mark "${task.title}" incomplete` : `Mark "${task.title}" complete`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (canEdit) onToggleComplete(task);
+            }}
+            className={`mt-0.5 shrink-0 rounded-full transition-colors ${
+              task.completed
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : 'text-slate-400 hover:text-slate-700 dark:text-slate-500 dark:hover:text-slate-300'
+            } disabled:opacity-50 disabled:cursor-default`}
+          >
+            {task.completed ? (
+              <span className="w-4 h-4 rounded-full bg-emerald-600 dark:bg-emerald-500 text-white flex items-center justify-center">
+                <Check className="w-2.5 h-2.5 stroke-[3]" />
+              </span>
+            ) : (
+              <Circle className="w-4 h-4" />
+            )}
+          </button>
 
-        <div className="min-w-0 flex-1 space-y-2">
+          <span
+            title={`Priority: ${priorityInfo.label}`}
+            className={`[writing-mode:vertical-rl] rotate-180 text-[10px] leading-none tracking-[0.03em] select-none ${priorityInfo.className}`}
+          >
+            {priorityInfo.label}
+          </span>
+        </div>
+
+        <div className="min-w-0 flex-1 space-y-1.5">
           <div className="flex items-start justify-between gap-2">
             <div
               className={`text-sm font-medium leading-snug line-clamp-2 ${
@@ -161,121 +241,59 @@ export function TaskCard({
             </p>
           )}
 
-          {/* Zero-pill metadata line */}
-          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-            <span className={priorityInfo.className}>{priorityInfo.label}</span>
-
-            {due && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span
-                  className={
-                    !task.completed && due.isOverdue
-                      ? 'text-red-600 dark:text-red-400 font-medium'
-                      : ''
-                  }
-                >
-                  {!task.completed && due.isOverdue ? `Overdue ${due.text}` : due.text}
+          {metaItems.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+              {metaItems.map((item, idx) => (
+                <span key={idx} className="inline-flex items-center gap-1.5 min-w-0">
+                  {idx > 0 && <span aria-hidden="true">·</span>}
+                  {item}
                 </span>
-              </>
-            )}
+              ))}
+            </div>
+          )}
 
-            {assigneeName && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span className="text-slate-600 dark:text-slate-300 truncate max-w-[120px]">
-                  {assigneeName}
-                </span>
-              </>
-            )}
-
-            {task.tags.length > 0 && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span className="truncate max-w-[150px] text-slate-500 dark:text-slate-400">
-                  {task.tags.join(' / ')}
-                </span>
-              </>
-            )}
-
-            {linkCount > 0 && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span
-                  title={`${linkCount} linked file/repo URL${linkCount === 1 ? '' : 's'}`}
-                  className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300"
-                >
-                  <Link2 className="w-3 h-3" />
-                  <span>{linkCount}</span>
-                </span>
-              </>
-            )}
-
-            {milestoneCount > 0 && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span
-                  title={`${milestoneCount} important date${milestoneCount === 1 ? '' : 's'}`}
-                  className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300"
-                >
-                  <Flag className="w-3 h-3" />
-                  <span>{milestoneCount}</span>
-                </span>
-              </>
-            )}
-
-            {messageCount > 0 && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300">
-                  <MessageSquare className="w-3 h-3" />
-                  <span>{messageCount}</span>
-                </span>
-              </>
-            )}
-
-            {task.reviewed ? (
-              <>
-                <span aria-hidden="true">·</span>
-                <span
-                  title={
-                    reviewerName
-                      ? `Reviewed (Reviewer: ${reviewerName})`
-                      : 'Marked reviewed'
-                  }
-                  className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium"
-                >
-                  <ShieldCheck className="w-3 h-3" />
-                  <span>Reviewed</span>
-                </span>
-              </>
-            ) : (
-              reviewerName && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span
-                    title={`Reviewer: ${reviewerName}`}
-                    className="inline-flex items-center gap-1 text-slate-500 dark:text-slate-400 truncate max-w-[130px]"
-                  >
-                    <ShieldCheck className="w-3 h-3 shrink-0" />
-                    <span className="truncate">{reviewerName}</span>
+          {hasPeopleLines && (
+            <div className="pt-1 border-t border-slate-100 dark:border-slate-800/80 space-y-0.5 text-xs leading-tight">
+              {assigneeName && (
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-slate-400 dark:text-slate-500 shrink-0">Assignee:</span>
+                  <span className="text-slate-700 dark:text-slate-300 font-medium truncate">
+                    {assigneeName}
                   </span>
-                </>
-              )
-            )}
+                </div>
+              )}
 
-            {task.notificationsEnabled === false && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span
-                  title="Task notifications muted"
-                  className="inline-flex items-center gap-1 text-slate-400 dark:text-slate-500"
-                >
-                  <BellOff className="w-3 h-3" />
-                </span>
-              </>
-            )}
-          </div>
+              {(reviewerName || task.reviewed) && (
+                <div className="flex items-center justify-between gap-2 min-w-0">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-slate-400 dark:text-slate-500 shrink-0">Reviewer:</span>
+                    {reviewerName ? (
+                      <span className="text-slate-700 dark:text-slate-300 font-medium truncate">
+                        {reviewerName}
+                      </span>
+                    ) : (
+                      <span
+                        title="Marked reviewed"
+                        className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium whitespace-nowrap"
+                      >
+                        <ShieldCheck className="w-3 h-3 shrink-0" />
+                        <span>Reviewed</span>
+                      </span>
+                    )}
+                  </div>
+                  {reviewerName && task.reviewed && (
+                    <span
+                      title={`Reviewed (Reviewer: ${reviewerName})`}
+                      className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium shrink-0 whitespace-nowrap"
+                    >
+                      <ShieldCheck className="w-3 h-3 shrink-0" />
+                      <span>Reviewed</span>
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {checklistExpanded && subtasks.length > 0 && (
             <div
