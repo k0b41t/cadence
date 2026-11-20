@@ -68,26 +68,57 @@ interface TaskDetailModalProps {
   onClose: () => void;
 }
 
-function formatTaskMutationError(err: unknown, fallback: string): string {
+interface TaskMutationErrorContext {
+  actionLabel: string;
+  boardStatus?: string;
+  isCreator?: boolean;
+  isAdmin?: boolean;
+  canAssignTasks?: boolean;
+}
+
+function formatTaskMutationError(
+  err: unknown,
+  fallback: string,
+  ctx?: TaskMutationErrorContext
+): string {
   if (!(err instanceof Error) || !err.message) return fallback;
   const raw = err.message.trim();
+  let innerError = raw;
+  let errorPath = '';
+
   if (raw.startsWith('{')) {
     try {
-      const parsed = JSON.parse(raw) as { error?: string };
-      const inner = (parsed.error || '').toLowerCase();
-      if (inner.includes('permission') || inner.includes('insufficient')) {
-        return 'Permission denied — ensure this board is active, you have "Add assignee / reviewer" access, and the selected person is a board member.';
-      }
-      if (parsed.error) return parsed.error;
+      const parsed = JSON.parse(raw) as { error?: string; path?: string | null };
+      if (parsed.error) innerError = parsed.error;
+      if (parsed.path) errorPath = parsed.path;
     } catch {
-      // fall through to raw message
+      // keep raw message
     }
   }
-  const lower = raw.toLowerCase();
+
+  const lower = innerError.toLowerCase();
   if (lower.includes('permission') || lower.includes('insufficient')) {
-    return 'Permission denied — ensure this board is active, you have "Add assignee / reviewer" access, and the selected person is a board member.';
+    const action = ctx?.actionLabel || 'updating this task';
+    const roleSummary = ctx?.isAdmin
+      ? 'Admin'
+      : ctx?.isCreator
+        ? 'Board Creator'
+        : ctx?.canAssignTasks
+          ? 'Member with assign access'
+          : 'No assign access';
+    const details = [
+      innerError,
+      ctx?.boardStatus ? `board: ${ctx.boardStatus}` : '',
+      `role: ${roleSummary}`,
+      errorPath ? `path: ${errorPath}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
+    return `Permission denied while ${action}. Make sure the board is active and your role allows assigning tasks (${details}).`;
   }
-  return raw;
+
+  return innerError || fallback;
 }
 
 function serializeForSync(value: unknown): string {
@@ -379,7 +410,15 @@ export function TaskDetailModal({
       });
       onClose();
     } catch (err) {
-      setErrorMsg(formatTaskMutationError(err, 'Unable to save task changes.'));
+      setErrorMsg(
+        formatTaskMutationError(err, 'Unable to save task changes.', {
+          actionLabel: 'saving task changes',
+          boardStatus: board.status,
+          isCreator: board.ownerId === uid,
+          isAdmin,
+          canAssignTasks,
+        })
+      );
       setSaving(false);
     }
   };
@@ -400,7 +439,15 @@ export function TaskDetailModal({
       await deleteTask(board.id, task.id);
       onClose();
     } catch (err) {
-      setErrorMsg(formatTaskMutationError(err, 'Unable to delete task.'));
+      setErrorMsg(
+        formatTaskMutationError(err, 'Unable to delete task.', {
+          actionLabel: 'deleting this task',
+          boardStatus: board.status,
+          isCreator: board.ownerId === uid,
+          isAdmin,
+          canAssignTasks,
+        })
+      );
       setSaving(false);
     }
   };
@@ -415,7 +462,15 @@ export function TaskDetailModal({
       await sendTaskMessage(uid, senderName, board, { id: task.id, title: title.trim() || task.title }, clean);
       setNewMessageText('');
     } catch (err) {
-      setErrorMsg(formatTaskMutationError(err, 'Unable to send chat message.'));
+      setErrorMsg(
+        formatTaskMutationError(err, 'Unable to send chat message.', {
+          actionLabel: 'sending chat message',
+          boardStatus: board.status,
+          isCreator: board.ownerId === uid,
+          isAdmin,
+          canAssignTasks,
+        })
+      );
     } finally {
       setSendingMessage(false);
     }
@@ -432,7 +487,13 @@ export function TaskDetailModal({
       await updateTaskAssignee(board.id, task.id, nextAssigneeId);
     } catch (err) {
       setAssigneeId(prevAssigneeId);
-      const formatted = formatTaskMutationError(err, 'Unable to update assignee.');
+      const formatted = formatTaskMutationError(err, 'Unable to update assignee.', {
+        actionLabel: 'updating task assignee',
+        boardStatus: board.status,
+        isCreator: board.ownerId === uid,
+        isAdmin,
+        canAssignTasks,
+      });
       setAssigneeError(formatted);
       setErrorMsg(formatted);
     } finally {
@@ -451,7 +512,13 @@ export function TaskDetailModal({
       await updateTaskReviewer(board.id, task.id, nextReviewerId);
     } catch (err) {
       setReviewerId(prevReviewerId);
-      const formatted = formatTaskMutationError(err, 'Unable to assign reviewer.');
+      const formatted = formatTaskMutationError(err, 'Unable to assign reviewer.', {
+        actionLabel: 'assigning reviewer',
+        boardStatus: board.status,
+        isCreator: board.ownerId === uid,
+        isAdmin,
+        canAssignTasks,
+      });
       setReviewError(formatted);
       setErrorMsg(formatted);
     } finally {
@@ -478,7 +545,13 @@ export function TaskDetailModal({
       setReviewed(prevReviewed);
       setReviewedAt(prevReviewedAt);
       setReviewedBy(prevReviewedBy);
-      const formatted = formatTaskMutationError(err, 'Unable to update review status.');
+      const formatted = formatTaskMutationError(err, 'Unable to update review status.', {
+        actionLabel: 'updating review status',
+        boardStatus: board.status,
+        isCreator: board.ownerId === uid,
+        isAdmin,
+        canAssignTasks,
+      });
       setReviewError(formatted);
       setErrorMsg(formatted);
     } finally {
@@ -674,7 +747,7 @@ export function TaskDetailModal({
                     </option>
                   ))}
                   {assigneeId && !assigneeOptions.some((opt) => opt.uid === assigneeId) && (
-                    <option value={assigneeId}>Board member</option>
+                    <option value={assigneeId}>Unlisted user</option>
                   )}
                 </select>
                 {savingAssignee && (
@@ -1263,7 +1336,7 @@ export function TaskDetailModal({
                     </option>
                   ))}
                   {reviewerId && !assigneeOptions.some((opt) => opt.uid === reviewerId) && (
-                    <option value={reviewerId}>Board member</option>
+                    <option value={reviewerId}>Unlisted user</option>
                   )}
                 </select>
                 {savingReview && (
