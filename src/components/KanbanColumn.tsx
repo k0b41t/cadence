@@ -20,6 +20,7 @@ interface KanbanColumnProps {
   assigneeNames: Record<string, string>;
   messageCounts: Record<string, number>;
   subtasksByTask?: Record<string, Subtask[]>;
+  taskZoom?: number;
   draggedTaskId: string | null;
   dropTarget: { columnId: string; index: number } | null;
   isReviewBlockedDrop?: boolean;
@@ -86,6 +87,7 @@ export function KanbanColumn({
   assigneeNames,
   messageCounts,
   subtasksByTask,
+  taskZoom = 1,
   draggedTaskId,
   dropTarget,
   isReviewBlockedDrop = false,
@@ -298,62 +300,67 @@ export function KanbanColumn({
               : 'No tasks in this stage'}
           </div>
         ) : (
-          tasks.map((task, idx) => {
-            const showDropBefore =
-              isDropTargetColumn &&
-              dropTarget?.index === idx &&
-              draggedTaskId !== task.id;
-            return (
-              <div
-                key={task.id}
-                onDragOver={(e) => {
-                  if (!canEditTasks || !draggedTaskId) return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const isUpperHalf = e.clientY < rect.top + rect.height / 2;
-                  onDragOverColumn(e, column.id, isUpperHalf ? idx : idx + 1);
-                }}
-                onDrop={(e) => {
-                  if (!canEditTasks) return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const isUpperHalf = e.clientY < rect.top + rect.height / 2;
-                  onDropOnColumn(e, column.id, isUpperHalf ? idx : idx + 1);
-                }}
-              >
-                {showDropBefore && !isReviewBlockedDrop && (
-                  <div
-                    aria-hidden="true"
-                    className="relative -mt-1.5 mb-1.5 h-2 flex items-center pointer-events-none"
-                  >
-                    <span className="w-2 h-2 rounded-full bg-blue-600 dark:bg-blue-400 shrink-0" />
-                    <div className="flex-1 h-0.5 bg-blue-600 dark:bg-blue-400" />
-                    <span className="px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white bg-blue-600 dark:bg-blue-500 rounded">
-                      Drop here
-                    </span>
-                    <div className="flex-1 h-0.5 bg-blue-600 dark:bg-blue-400" />
-                    <span className="w-2 h-2 rounded-full bg-blue-600 dark:bg-blue-400 shrink-0" />
-                  </div>
-                )}
-                <TaskCard
-                  task={task}
-                  canEdit={canEditTasks}
-                  assigneeName={task.assigneeId ? assigneeNames[task.assigneeId] : undefined}
-                  reviewerName={task.reviewerId ? assigneeNames[task.reviewerId] : undefined}
-                  messageCount={messageCounts[task.id] ?? 0}
-                  subtasks={subtasksByTask?.[task.id]}
-                  isDragging={draggedTaskId === task.id}
-                  onDragStart={onDragStartTask}
-                  onDragEnd={onDragEndTask}
-                  onClick={onSelectTask}
-                  onToggleComplete={onToggleTaskComplete}
-                  onToggleSubtask={onToggleSubtask}
-                />
-              </div>
-            );
-          })
+          <div
+            style={taskZoom !== 1 ? { zoom: taskZoom } : undefined}
+            className="space-y-2.5"
+          >
+            {tasks.map((task, idx) => {
+              const showDropBefore =
+                isDropTargetColumn &&
+                dropTarget?.index === idx &&
+                draggedTaskId !== task.id;
+              return (
+                <div
+                  key={task.id}
+                  onDragOver={(e) => {
+                    if (!canEditTasks || !draggedTaskId) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const isUpperHalf = e.clientY < rect.top + rect.height / 2;
+                    onDragOverColumn(e, column.id, isUpperHalf ? idx : idx + 1);
+                  }}
+                  onDrop={(e) => {
+                    if (!canEditTasks) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const isUpperHalf = e.clientY < rect.top + rect.height / 2;
+                    onDropOnColumn(e, column.id, isUpperHalf ? idx : idx + 1);
+                  }}
+                >
+                  {showDropBefore && !isReviewBlockedDrop && (
+                    <div
+                      aria-hidden="true"
+                      className="relative -mt-1.5 mb-1.5 h-2 flex items-center pointer-events-none"
+                    >
+                      <span className="w-2 h-2 rounded-full bg-blue-600 dark:bg-blue-400 shrink-0" />
+                      <div className="flex-1 h-0.5 bg-blue-600 dark:bg-blue-400" />
+                      <span className="px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white bg-blue-600 dark:bg-blue-500 rounded">
+                        Drop here
+                      </span>
+                      <div className="flex-1 h-0.5 bg-blue-600 dark:bg-blue-400" />
+                      <span className="w-2 h-2 rounded-full bg-blue-600 dark:bg-blue-400 shrink-0" />
+                    </div>
+                  )}
+                  <TaskCard
+                    task={task}
+                    canEdit={canEditTasks}
+                    assigneeName={task.assigneeId ? assigneeNames[task.assigneeId] : undefined}
+                    reviewerName={task.reviewerId ? assigneeNames[task.reviewerId] : undefined}
+                    messageCount={messageCounts[task.id] ?? 0}
+                    subtasks={subtasksByTask?.[task.id]}
+                    isDragging={draggedTaskId === task.id}
+                    onDragStart={onDragStartTask}
+                    onDragEnd={onDragEndTask}
+                    onClick={onSelectTask}
+                    onToggleComplete={onToggleTaskComplete}
+                    onToggleSubtask={onToggleSubtask}
+                  />
+                </div>
+              );
+            })}
+          </div>
         )}
 
         {isDropTargetColumn &&

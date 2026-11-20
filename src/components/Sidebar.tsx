@@ -12,6 +12,7 @@ import {
   Link2,
   LogOut,
   Moon,
+  PanelLeftClose,
   Plus,
   ShieldCheck,
   Sun,
@@ -34,7 +35,9 @@ interface SidebarProps {
   isAdminPageActive: boolean;
   theme: ThemeMode;
   mobileOpen: boolean;
+  desktopCollapsed?: boolean;
   onCloseMobile: () => void;
+  onToggleDesktopCollapse?: () => void;
   onSelectBoard: (boardId: string) => void;
   onReorderBoards: (nextBoardOrder: string[]) => void;
   onOpenNewBoard: () => void;
@@ -74,7 +77,9 @@ export function Sidebar({
   isAdminPageActive,
   theme,
   mobileOpen,
+  desktopCollapsed = false,
   onCloseMobile,
+  onToggleDesktopCollapse,
   onSelectBoard,
   onReorderBoards,
   onOpenNewBoard,
@@ -336,14 +341,27 @@ export function Sidebar({
         <span className="font-display text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap shrink-0">
           Cadence
         </span>
-        <button
-          type="button"
-          onClick={onCloseMobile}
-          aria-label="Close navigation menu"
-          className="lg:hidden p-1.5 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 rounded-md"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          {onToggleDesktopCollapse && (
+            <button
+              type="button"
+              onClick={onToggleDesktopCollapse}
+              aria-label="Collapse left panel"
+              title="Collapse left panel"
+              className="hidden lg:inline-flex p-1.5 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
+            >
+              <PanelLeftClose className="w-4 h-4" />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onCloseMobile}
+            aria-label="Close navigation menu"
+            className="lg:hidden p-1.5 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 rounded-md"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Boards list */}
@@ -577,7 +595,7 @@ export function Sidebar({
 
   return (
     <>
-      <aside className="hidden lg:block shrink-0">{content}</aside>
+      {!desktopCollapsed && <aside className="hidden lg:block shrink-0">{content}</aside>}
 
       {mobileOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">

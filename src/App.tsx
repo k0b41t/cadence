@@ -10,6 +10,7 @@ import {
   Image as ImageIcon,
   Menu,
   MessageSquare,
+  PanelLeftOpen,
   Plus,
   Search,
   Settings,
@@ -18,6 +19,8 @@ import {
   Undo2,
   Users,
   X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { AccessDeniedView } from './components/AccessDeniedView';
 import { AddUsersModal } from './components/AddUsersModal';
@@ -116,6 +119,25 @@ function computeInsertPosition(sortedTasks: Task[], insertIndex: number): number
 
 const PENDING_ACCESS_STORAGE_KEY = 'cadence_pending_access';
 const PENDING_JOIN_STORAGE_KEY = 'cadence_pending_join';
+const BOARD_ZOOM_STORAGE_KEY = 'cadence_board_zoom';
+const BOARD_ZOOM_MIN = 50;
+const BOARD_ZOOM_MAX = 120;
+const BOARD_ZOOM_STEP = 10;
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'cadence_sidebar_collapsed';
+
+function loadStoredBoardZoom(): number {
+  if (typeof window === 'undefined') return 100;
+  const raw = Number(window.localStorage.getItem(BOARD_ZOOM_STORAGE_KEY));
+  if (!Number.isFinite(raw) || raw < BOARD_ZOOM_MIN || raw > BOARD_ZOOM_MAX) {
+    return 100;
+  }
+  return Math.round(raw / BOARD_ZOOM_STEP) * BOARD_ZOOM_STEP;
+}
+
+function loadStoredSidebarCollapsed(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
+}
 
 function readStoredPendingJoin(): PendingBoardJoinTarget | null {
   if (typeof window === 'undefined') return null;
@@ -246,6 +268,7 @@ function WorkspaceApp() {
 
   // Filters, search & view mode
   const [viewMode, setViewMode] = useState<'board' | 'calendar'>('board');
+  const [boardZoom, setBoardZoom] = useState<number>(() => loadStoredBoardZoom());
   const [searchQuery, setSearchQuery] = useState('');
   const [priorityFilter, setPriorityFilter] = useState<'all' | Priority>('all');
   const [hideCompleted, setHideCompleted] = useState(false);
@@ -255,6 +278,9 @@ function WorkspaceApp() {
 
   // Modals & UI drawers
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() =>
+    loadStoredSidebarCollapsed()
+  );
   const [boardModalState, setBoardModalState] = useState<{
     mode: 'create' | 'edit';
     board?: Board;
@@ -344,6 +370,17 @@ function WorkspaceApp() {
   useEffect(() => {
     applyFontsToDocument(fonts);
   }, [fonts]);
+
+  useEffect(() => {
+    window.localStorage.setItem(BOARD_ZOOM_STORAGE_KEY, String(boardZoom));
+  }, [boardZoom]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      SIDEBAR_COLLAPSED_STORAGE_KEY,
+      sidebarCollapsed ? 'true' : 'false'
+    );
+  }, [sidebarCollapsed]);
 
   useEffect(() => {
     if (!filtersOpen) return;
@@ -1249,7 +1286,9 @@ function WorkspaceApp() {
         isAdminPageActive={workspacePage === 'admin' && isAdmin}
         theme={theme}
         mobileOpen={mobileSidebarOpen}
+        desktopCollapsed={sidebarCollapsed}
         onCloseMobile={() => setMobileSidebarOpen(false)}
+        onToggleDesktopCollapse={() => setSidebarCollapsed((c) => !c)}
         onSelectBoard={handleSelectBoard}
         onReorderBoards={handleReorderBoards}
         onOpenNewBoard={() => setBoardModalState({ mode: 'create' })}
@@ -1274,6 +1313,18 @@ function WorkspaceApp() {
             >
               <Menu className="w-5 h-5" />
             </button>
+
+            {sidebarCollapsed && (
+              <button
+                type="button"
+                onClick={() => setSidebarCollapsed(false)}
+                aria-label="Expand left panel"
+                title="Show left panel"
+                className="hidden lg:inline-flex items-center justify-center p-1.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 shrink-0"
+              >
+                <PanelLeftOpen className="w-4 h-4" />
+              </button>
+            )}
 
             <div className="flex items-center gap-2 text-[13px] min-w-0">
               <span className="text-slate-400 dark:text-slate-500 hidden sm:inline whitespace-nowrap">
@@ -1610,6 +1661,45 @@ function WorkspaceApp() {
                 </button>
               </div>
 
+              {viewMode === 'board' && (
+                <div
+                  role="group"
+                  aria-label="Board task zoom"
+                  className="flex items-center gap-0.5 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shrink-0"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setBoardZoom((z) => Math.max(BOARD_ZOOM_MIN, z - BOARD_ZOOM_STEP))}
+                    disabled={boardZoom <= BOARD_ZOOM_MIN}
+                    aria-label="Zoom out tasks"
+                    title="Shrink tasks"
+                    className="p-1 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-white dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none rounded-md transition-colors"
+                  >
+                    <ZoomOut className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBoardZoom(100)}
+                    disabled={boardZoom === 100}
+                    title={boardZoom === 100 ? 'Task zoom: 100%' : 'Reset task zoom to 100%'}
+                    aria-label={`Task zoom ${boardZoom} percent. Click to reset to 100 percent`}
+                    className="px-1.5 py-0.5 text-xs font-mono tabular-nums text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 disabled:hover:text-slate-700 dark:disabled:hover:text-slate-300 rounded-md transition-colors whitespace-nowrap min-w-[3.1rem] text-center"
+                  >
+                    {boardZoom}%
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBoardZoom((z) => Math.min(BOARD_ZOOM_MAX, z + BOARD_ZOOM_STEP))}
+                    disabled={boardZoom >= BOARD_ZOOM_MAX}
+                    aria-label="Zoom in tasks"
+                    title="Enlarge tasks"
+                    className="p-1 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-white dark:hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none rounded-md transition-colors"
+                  >
+                    <ZoomIn className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
               <div className="hidden md:block text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap shrink-0">
                 {effectivePermissions.roleLabel} · {tasks.length}{' '}
                 {tasks.length === 1 ? 'task' : 'tasks'} · {completedCount} completed ·{' '}
@@ -1707,6 +1797,7 @@ function WorkspaceApp() {
                     assigneeNames={assigneeNameMap}
                     messageCounts={messageCounts}
                     subtasksByTask={subtasksByTask}
+                    taskZoom={boardZoom / 100}
                     draggedTaskId={draggedTask?.id ?? null}
                     dropTarget={dropTarget}
                     isReviewBlockedDrop={Boolean(
